@@ -1,0 +1,98 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.31.2.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 625cbc3611cabbb0cabd7caf1698dbf32628305e69938f4803e77d1d9495ce6c
+
+name:           dbxftp
+version:        0.0.0
+homepage:       https://github.com/eschnett/dbxftp#readme
+bug-reports:    https://github.com/eschnett/dbxftp/issues
+author:         Erik Schnetter
+maintainer:     Erik Schnetter
+license:        MIT
+build-type:     Simple
+extra-source-files:
+    CHANGELOG.md
+    LICENSE.md
+    package.yaml
+    README.md
+    stack.yaml
+
+source-repository head
+  type: git
+  location: https://github.com/eschnett/dbxftp
+
+library
+  exposed-modules:
+      DBXFTP
+  other-modules:
+      Paths_dbxftp
+  hs-source-dirs:
+      src
+  default-extensions: BangPatterns BinaryLiterals ConstraintKinds DataKinds DefaultSignatures DeriveAnyClass DerivingStrategies DerivingVia EmptyCase EmptyDataDecls ExistentialQuantification ExplicitForAll ExplicitNamespaces ExtendedDefaultRules FlexibleContexts FlexibleInstances ForeignFunctionInterface FunctionalDependencies GADTSyntax GADTs GeneralizedNewtypeDeriving HexFloatLiterals ImplicitParams IncoherentInstances InstanceSigs KindSignatures LambdaCase MultiParamTypeClasses MultiWayIf NPlusKPatterns NamedFieldPuns NamedWildCards NumericUnderscores OverloadedLabels OverloadedStrings PackageImports PatternGuards PolyKinds QuantifiedConstraints QuasiQuotes RankNTypes RecordWildCards RecursiveDo RoleAnnotations ScopedTypeVariables StandaloneDeriving StarIsType StaticPointers TemplateHaskell TupleSections TypeApplications TypeFamilies TypeFamilyDependencies TypeInType TypeOperators UndecidableInstances UndecidableSuperClasses ApplicativeDo BlockArguments DeriveFoldable DeriveFunctor DeriveGeneric DeriveLift DeriveTraversable ParallelListComp PatternSynonyms TypeSynonymInstances UnicodeSyntax AllowAmbiguousTypes MonadComprehensions
+  ghc-options: -fno-ignore-asserts -foptimal-applicative-do -funbox-strict-fields -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints -Wno-unused-matches
+  build-depends:
+      aeson
+    , base
+    , bytestring
+    , extra
+    , filepath
+    , http-client
+    , http-client-tls
+    , http-conduit
+    , monad-loops
+    , scientific
+    , streamly
+    , text
+    , unix
+    , unordered-containers
+    , vector
+    , yaml
+  default-language: Haskell2010
+
+executable dbxftp
+  main-is: Main.hs
+  other-modules:
+      Paths_dbxftp
+  hs-source-dirs:
+      app
+  default-extensions: BangPatterns BinaryLiterals ConstraintKinds DataKinds DefaultSignatures DeriveAnyClass DerivingStrategies DerivingVia EmptyCase EmptyDataDecls ExistentialQuantification ExplicitForAll ExplicitNamespaces ExtendedDefaultRules FlexibleContexts FlexibleInstances ForeignFunctionInterface FunctionalDependencies GADTSyntax GADTs GeneralizedNewtypeDeriving HexFloatLiterals ImplicitParams IncoherentInstances InstanceSigs KindSignatures LambdaCase MultiParamTypeClasses MultiWayIf NPlusKPatterns NamedFieldPuns NamedWildCards NumericUnderscores OverloadedLabels OverloadedStrings PackageImports PatternGuards PolyKinds QuantifiedConstraints QuasiQuotes RankNTypes RecordWildCards RecursiveDo RoleAnnotations ScopedTypeVariables StandaloneDeriving StarIsType StaticPointers TemplateHaskell TupleSections TypeApplications TypeFamilies TypeFamilyDependencies TypeInType TypeOperators UndecidableInstances UndecidableSuperClasses ApplicativeDo BlockArguments DeriveFoldable DeriveFunctor DeriveGeneric DeriveLift DeriveTraversable ParallelListComp PatternSynonyms TypeSynonymInstances UnicodeSyntax AllowAmbiguousTypes MonadComprehensions
+  ghc-options: -fno-ignore-asserts -foptimal-applicative-do -funbox-strict-fields -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints -Wno-unused-matches -rtsopts -threaded -with-rtsopts=-N
+  build-depends:
+      base
+    , dbxftp
+  default-language: Haskell2010
+
+test-suite dbxftp-test-suite
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      Paths_dbxftp
+  hs-source-dirs:
+      test
+  default-extensions: BangPatterns BinaryLiterals ConstraintKinds DataKinds DefaultSignatures DeriveAnyClass DerivingStrategies DerivingVia EmptyCase EmptyDataDecls ExistentialQuantification ExplicitForAll ExplicitNamespaces ExtendedDefaultRules FlexibleContexts FlexibleInstances ForeignFunctionInterface FunctionalDependencies GADTSyntax GADTs GeneralizedNewtypeDeriving HexFloatLiterals ImplicitParams IncoherentInstances InstanceSigs KindSignatures LambdaCase MultiParamTypeClasses MultiWayIf NPlusKPatterns NamedFieldPuns NamedWildCards NumericUnderscores OverloadedLabels OverloadedStrings PackageImports PatternGuards PolyKinds QuantifiedConstraints QuasiQuotes RankNTypes RecordWildCards RecursiveDo RoleAnnotations ScopedTypeVariables StandaloneDeriving StarIsType StaticPointers TemplateHaskell TupleSections TypeApplications TypeFamilies TypeFamilyDependencies TypeInType TypeOperators UndecidableInstances UndecidableSuperClasses ApplicativeDo BlockArguments DeriveFoldable DeriveFunctor DeriveGeneric DeriveLift DeriveTraversable ParallelListComp PatternSynonyms TypeSynonymInstances UnicodeSyntax AllowAmbiguousTypes MonadComprehensions
+  ghc-options: -fno-ignore-asserts -foptimal-applicative-do -funbox-strict-fields -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints -Wno-unused-matches -rtsopts -threaded -with-rtsopts=-N
+  build-depends:
+      base
+    , dbxftp
+    , tasty
+    , tasty-hspec
+  default-language: Haskell2010
+
+benchmark dbxftp-benchmarks
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      Paths_dbxftp
+  hs-source-dirs:
+      bench
+  default-extensions: BangPatterns BinaryLiterals ConstraintKinds DataKinds DefaultSignatures DeriveAnyClass DerivingStrategies DerivingVia EmptyCase EmptyDataDecls ExistentialQuantification ExplicitForAll ExplicitNamespaces ExtendedDefaultRules FlexibleContexts FlexibleInstances ForeignFunctionInterface FunctionalDependencies GADTSyntax GADTs GeneralizedNewtypeDeriving HexFloatLiterals ImplicitParams IncoherentInstances InstanceSigs KindSignatures LambdaCase MultiParamTypeClasses MultiWayIf NPlusKPatterns NamedFieldPuns NamedWildCards NumericUnderscores OverloadedLabels OverloadedStrings PackageImports PatternGuards PolyKinds QuantifiedConstraints QuasiQuotes RankNTypes RecordWildCards RecursiveDo RoleAnnotations ScopedTypeVariables StandaloneDeriving StarIsType StaticPointers TemplateHaskell TupleSections TypeApplications TypeFamilies TypeFamilyDependencies TypeInType TypeOperators UndecidableInstances UndecidableSuperClasses ApplicativeDo BlockArguments DeriveFoldable DeriveFunctor DeriveGeneric DeriveLift DeriveTraversable ParallelListComp PatternSynonyms TypeSynonymInstances UnicodeSyntax AllowAmbiguousTypes MonadComprehensions
+  ghc-options: -fno-ignore-asserts -foptimal-applicative-do -funbox-strict-fields -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints -Wno-unused-matches -rtsopts -threaded -with-rtsopts=-N
+  build-depends:
+      base
+    , criterion
+    , dbxftp
+  default-language: Haskell2010

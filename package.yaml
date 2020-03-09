@@ -1,0 +1,216 @@
+# This YAML file describes your package. Stack will automatically generate a
+# Cabal file when you run `stack build`. See the hpack website for help with
+# this file: <https://github.com/sol/hpack>.
+name: dbxftp
+version: '0.0.0'
+github: "eschnett/dbxftp"
+license: MIT
+author: "Erik Schnetter"
+maintainer: "Erik Schnetter"
+# synopsis: A new Haskell package.
+# description: dbxftp is a new Haskell package.
+# category: Other
+
+extra-source-files:
+  - CHANGELOG.md
+  - LICENSE.md
+  - package.yaml
+  - README.md
+  - stack.yaml
+
+ghc-options:
+  - -fno-ignore-asserts
+  - -foptimal-applicative-do
+  - -funbox-strict-fields
+  - -Wall
+  - -Wcompat
+  - -Wincomplete-record-updates
+  - -Wincomplete-uni-patterns
+  - -Wredundant-constraints
+  - -Wno-unused-matches
+
+default-extensions:
+  # This is the set of default extensions supported by Ormolu
+  # <https://github.com/tweag/ormolu>
+  - BangPatterns
+  - BinaryLiterals
+  - ConstraintKinds
+  - DataKinds
+  - DefaultSignatures
+  - DeriveAnyClass
+  - DerivingStrategies
+  - DerivingVia
+  - EmptyCase
+  - EmptyDataDecls
+  - ExistentialQuantification
+  - ExplicitForAll
+  - ExplicitNamespaces
+  - ExtendedDefaultRules
+  - FlexibleContexts
+  - FlexibleInstances
+  - ForeignFunctionInterface
+  - FunctionalDependencies
+  - GADTSyntax
+  - GADTs
+  - GeneralizedNewtypeDeriving
+  - HexFloatLiterals
+  - ImplicitParams
+  - IncoherentInstances
+  - InstanceSigs
+  - KindSignatures
+  - LambdaCase
+  - MultiParamTypeClasses
+  - MultiWayIf
+  - NPlusKPatterns
+  - NamedFieldPuns
+  - NamedWildCards
+  # - NegativeLiterals   [breaks some subtractions]
+  - NumericUnderscores
+  - OverloadedLabels
+  # - OverloadedLists   [requires type annotations on lists]
+  - OverloadedStrings
+  - PackageImports
+  - PatternGuards
+  - PolyKinds
+  - QuantifiedConstraints
+  - QuasiQuotes
+  - RankNTypes
+  - RecordWildCards
+  - RecursiveDo
+  - RoleAnnotations
+  - ScopedTypeVariables
+  - StandaloneDeriving
+  - StarIsType
+  - StaticPointers
+  - TemplateHaskell
+  - TupleSections
+  - TypeApplications
+  - TypeFamilies
+  - TypeFamilyDependencies
+  - TypeInType
+  - TypeOperators
+  - UndecidableInstances
+  - UndecidableSuperClasses
+  # We like these extensions as well
+  - ApplicativeDo
+  - BlockArguments
+  - DeriveFoldable
+  - DeriveFunctor
+  - DeriveGeneric
+  - DeriveLift
+  - DeriveTraversable
+  - ParallelListComp
+  - PatternSynonyms
+  - TypeSynonymInstances
+  - UnicodeSyntax
+  # We also like these extensions, although they might be controversial
+  - AllowAmbiguousTypes
+  - MonadComprehensions
+
+# default-extensions:
+#   - ApplicativeDo
+#   - BangPatterns
+#   - BinaryLiterals
+#   - BlockArguments
+#   - ConstraintKinds
+#   - DataKinds
+#   - DefaultSignatures
+#   - DeriveFoldable
+#   - DeriveFunctor
+#   - DeriveGeneric
+#   - DeriveLift
+#   - DeriveTraversable
+#   - DerivingStrategies
+#   - EmptyCase
+#   - ExistentialQuantification
+#   - FlexibleContexts
+#   - FlexibleInstances
+#   - FunctionalDependencies
+#   - GADTs
+#   - GeneralizedNewtypeDeriving
+#   - InstanceSigs
+#   - KindSignatures
+#   - LambdaCase
+#   - MultiParamTypeClasses
+#   - MultiWayIf
+#   - NamedFieldPuns
+#   - OverloadedLists
+#   - OverloadedStrings
+#   - ParallelListComp
+#   - PatternSynonyms
+#   - QuantifiedConstraints
+#   - RankNTypes
+#   - ScopedTypeVariables
+#   - StandaloneDeriving
+#   - TupleSections
+#   - TypeApplications
+#   - TypeFamilies
+#   - TypeFamilyDependencies
+#   - TypeOperators
+#   - TypeSynonymInstances
+#   - UnicodeSyntax
+#   # more controversial?
+#   - AllowAmbiguousTypes
+#   - MonadComprehensions
+#   - PackageImports
+#   - PolyKinds
+#   - TypeInType
+
+library:
+  dependencies:
+    - aeson
+    - base
+    - bytestring
+    - extra
+    - filepath
+    - http-client
+    - http-client-tls
+    - http-conduit
+    - monad-loops
+    - scientific
+    - streamly
+    - text
+    - unix
+    - unordered-containers
+    - vector
+    - yaml
+  source-dirs: src
+
+executables:
+  dbxftp:
+    source-dirs: app
+    main: Main.hs
+    dependencies:
+      - base
+      - dbxftp
+    ghc-options:
+      - -rtsopts
+      - -threaded
+      - -with-rtsopts=-N
+
+benchmarks:
+  dbxftp-benchmarks:
+    source-dirs: bench
+    main: Main.hs
+    dependencies:
+      - base
+      - criterion
+      - dbxftp
+    ghc-options:
+      - -rtsopts
+      - -threaded
+      - -with-rtsopts=-N
+
+tests:
+  dbxftp-test-suite:
+    source-dirs: test
+    main: Main.hs
+    dependencies:
+      - base
+      - tasty
+      - tasty-hspec
+      - dbxftp
+    ghc-options:
+      - -rtsopts
+      - -threaded
+      - -with-rtsopts=-N
