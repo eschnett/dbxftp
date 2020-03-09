@@ -4,10 +4,15 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 625cbc3611cabbb0cabd7caf1698dbf32628305e69938f4803e77d1d9495ce6c
+-- hash: 9d49708d12103ada1c87c6491f8fa86bcc5f5bba3d94f592d85e5b0fe10a428a
 
 name:           dbxftp
 version:        0.0.0
+synopsis:       Dropbox API and CLI for Haskell
+description:    dbxftp is a library to access the Dropbox HTTP API, and also
+                provides a command line tool similar to the well-known "ftp"
+                program.
+category:       Web
 homepage:       https://github.com/eschnett/dbxftp#readme
 bug-reports:    https://github.com/eschnett/dbxftp/issues
 author:         Erik Schnetter

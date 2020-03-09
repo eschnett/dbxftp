@@ -7,9 +7,12 @@ github: "eschnett/dbxftp"
 license: MIT
 author: "Erik Schnetter"
 maintainer: "Erik Schnetter"
-# synopsis: A new Haskell package.
-# description: dbxftp is a new Haskell package.
-# category: Other
+synopsis: Dropbox API and CLI for Haskell
+description: |
+  dbxftp is a library to access the Dropbox HTTP API, and also
+  provides a command line tool similar to the well-known "ftp"
+  program.
+category: Web
 
 extra-source-files:
   - CHANGELOG.md
