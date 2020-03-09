@@ -15,6 +15,7 @@ module DBXFTP
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.QSemN
 import Control.Exception
+import Control.Monad
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Loops (iterateUntilM, untilJust)
 import qualified Data.ByteString.Char8 as S8
@@ -228,7 +229,9 @@ uploadFile (AppState authToken manager) upload =
                                 return Nothing
                   Right resp -> return $ Just resp
          let _ = response :: Response Value
-         assertM $ getResponseStatusCode response == 200
+         let st = getResponseStatusCode response
+         when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
+                             assert False $ return ()
          return $
            Cursor fileTail (coffset cursor + requestSize) (count cursor + 1)
 
