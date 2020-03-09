@@ -232,6 +232,7 @@ uploadFile (AppState authToken manager) upload =
          let _ = response :: Response Value
          let st = getResponseStatusCode response
          when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
+                             putStrLn $ show response
                              assert False $ return ()
          return $
            Cursor fileTail (coffset cursor + requestSize) (count cursor + 1)
