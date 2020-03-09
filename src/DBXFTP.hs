@@ -61,7 +61,7 @@ newAppState = do authToken <- getAuthToken
                  return $ AppState authToken manager
 
 getAuthToken :: IO S8.ByteString
-getAuthToken = do home <- getEnvDefault "" "HOME"
+getAuthToken = do home <- getEnvDefault "HOME" ""
                   let fp = home </> ".dbxftp.http"
                   token <- bracket_ openFile closeFile $ readFile fp
                   return $ parseToken $ S8.pack token
