@@ -191,10 +191,13 @@ uploadFile (AppState authToken manager) upload =
                                 threadDelay 100000 -- 100 ms
                                 return Nothing
                   Right resp -> return $ Just resp
-         assertM $ getResponseStatusCode response == 200
+         let st = getResponseStatusCode response
+         when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
+                             putStrLn $ show response
+                             assert False $ return ()
          let Object json = getResponseBody response
          let String sessionId = json H.! "session_id"
-         return (sessionId, Cursor fileTail 0 0)
+         return (sessionId, Cursor fileTail requestSize 1)
     upload_session_append :: T.Text -> Cursor -> IO Cursor
     upload_session_append sessionId cursor =
       do putStrLn $ ("[uploading " ++ fp ++ " (" ++ show (count cursor + 1)
