@@ -4,5 +4,6 @@ main :: IO ()
 main =
   do putStrLn "DBXFTP"
      appState <- DBXFTP.newAppState
-     DBXFTP.put appState ["data"] "/test-20200309"
+     -- DBXFTP.ls appState "/test-20200309"
+     DBXFTP.put appState ["/tmp/data"] "/test-20200309"
      putStrLn "Done."

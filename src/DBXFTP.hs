@@ -9,6 +9,7 @@
 module DBXFTP
   ( AppState
   , newAppState
+  , ls
   , put
   ) where
 
@@ -27,6 +28,7 @@ import qualified Data.HashMap.Strict as H
 import Data.Int
 import Data.Maybe
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import Debug.Trace
 import Network.HTTP.Client hiding (fileSize)
 import Network.HTTP.Client.TLS
@@ -70,6 +72,47 @@ getAuthToken = do home <- getEnvDefault "HOME" ""
 
 
 
+ls :: AppState -> FilePath -> IO [FilePath]
+ls app fp =
+  do let args = object [ "path" .= String (T.pack fp)
+                       , "recursive" .= Bool False
+                       ]
+     let request =
+           defaultRequest
+           & setRequestManager (manager app)
+           & setRequestSecure True
+           & setRequestHost "api.dropboxapi.com"
+           & setRequestPort 443
+           & setRequestMethod "POST"
+           & setRequestPath "/2/files/list_folder"
+           & (setRequestHeader "Authorization"
+              [S8.append "Bearer " (authToken app)])
+           & setRequestHeader "Content-Type" ["application/json"]
+           & setRequestBodyJSON args
+     response <- untilJust
+       do jhresp <- try @JSONException $ try @HttpException
+                    $ httpJSON request
+          case jhresp of
+            Left ex -> do putStrLn $ show ex
+                          return Nothing
+            Right hresp -> case hresp of
+              Left ex -> do putStrLn $ show ex
+                            threadDelay 100000 -- 100 ms
+                            return Nothing
+              Right resp -> return $ Just resp
+     let st = getResponseStatusCode response
+     when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
+                         putStrLn $ show response
+                         assert False $ return ()
+     let Object json = getResponseBody response
+     let Array entries = json H.! "entries"
+     return $ fmap parseEntry (V.toList entries)
+  where parseEntry :: Value -> FilePath
+        parseEntry (Object entry) = let String name = entry H.! "name"
+                                    in T.unpack name
+
+
+
 put :: AppState -> [FilePath] -> FilePath -> IO ()
 put app fps op =
   S.drain
@@ -88,11 +131,12 @@ data UploadState = UploadState { sourcePath :: FilePath
                                , sourceSize :: Maybe Int64
                                , sessionId :: Maybe T.Text
                                , offset :: Maybe Int64
+                               , success :: Maybe Bool
                                }
   deriving (Eq, Ord, Read, Show)
 
 uploadState :: FilePath -> FilePath -> UploadState
-uploadState src dst = UploadState src dst Nothing Nothing Nothing
+uploadState src dst = UploadState src dst Nothing Nothing Nothing Nothing
 
 
 
@@ -118,7 +162,7 @@ readDir upload = S.map prependPath $ serially (listDir src)
 listDir :: FilePath -> Serial FilePath
 listDir dp = S.bracket open close read
   where open :: IO DirStream
-        open = do putStrLn $ "[reading directory " ++ dp ++ "...]"
+        open = do putStrLn $ "[reading directory " ++ quoteString dp ++ "...]"
                   openFile
                   ds <- openDirStream dp
                   return ds
@@ -141,6 +185,14 @@ data Cursor = Cursor { content :: BL.ByteString
                      }
               deriving (Eq, Ord, Read, Show)
 
+makeCursor :: BL.ByteString -> Cursor
+makeCursor content = Cursor content 0 0
+
+splitCursor :: Int64 -> Cursor -> (Cursor, Cursor)
+splitCursor sz (Cursor content coffset count) =
+  let (hd, tl) = BL.splitAt sz content
+  in (Cursor hd coffset count, Cursor tl (coffset + BL.length hd) (count + 1))
+
 cursorDone :: Cursor -> Bool
 cursorDone cursor = BL.null (content cursor)
 
@@ -149,24 +201,28 @@ uploadFile (AppState authToken manager) upload =
   do openFile
      file <- BL.readFile fp
      -- TODO: Should we be running upload sessions in parallel?
-     (sessionId, cursor) <- upload_session_start file
-     finalCursor <-
-       iterateUntilM cursorDone (upload_session_append sessionId) cursor
+     let cursor = makeCursor file
+     (sessionId, cursor) <- upload_session_start cursor
+     cursor <- iterateUntilM cursorDone (upload_session_append sessionId) cursor
      closeFile
      evaluate $ upload { sessionId = Just sessionId
-                       , offset = Just (coffset finalCursor)
+                       , offset = Just (coffset cursor)
                        }
   where
     fp = sourcePath upload
+    op = destPath upload
     fs = fromJust (sourceSize upload)
     divup i j = (i + j - 1) `div` j
     requestSize = 150000000 :: Int64 -- 150 MByte
     nrequests = fs `divup` fromIntegral requestSize
-    upload_session_start :: BL.ByteString -> IO (T.Text, Cursor)
-    upload_session_start file =
-      do putStrLn $ "[uploading " ++ fp ++ " (1/" ++ show nrequests ++ ")...]"
-         let (fileHead, fileTail) = BL.splitAt requestSize file
-         let args = object [ "close" .= (BL.null fileTail) ]
+    upload_session_start :: Cursor -> IO (T.Text, Cursor)
+    upload_session_start cursor =
+      do let (headCursor, tailCursor) = splitCursor requestSize cursor
+         putStrLn $ ("[uploading " ++ quoteString fp ++ " to " ++ quoteString op
+                     ++ " (" ++ show (count headCursor + 1) ++ "/"
+                     ++ show nrequests ++ ")...]")
+         let args = object ["close" .= cursorDone tailCursor]
+         assertM $ coffset headCursor == 0
          let request =
                defaultRequest
                & setRequestManager manager
@@ -179,7 +235,7 @@ uploadFile (AppState authToken manager) upload =
                   [S8.append "Bearer " authToken])
                & setRequestHeader "Dropbox-API-Arg" [BL.toStrict (encode args)]
                & setRequestHeader "Content-Type" ["application/octet-stream"]
-               & setRequestBodyLBS fileHead
+               & setRequestBodyLBS (content headCursor)
          response <- untilJust
            do jhresp <- try @JSONException $ try @HttpException
                         $ httpJSON request
@@ -197,17 +253,19 @@ uploadFile (AppState authToken manager) upload =
                              assert False $ return ()
          let Object json = getResponseBody response
          let String sessionId = json H.! "session_id"
-         return (sessionId, Cursor fileTail requestSize 1)
+         return (sessionId, tailCursor)
     upload_session_append :: T.Text -> Cursor -> IO Cursor
     upload_session_append sessionId cursor =
-      do putStrLn $ ("[uploading " ++ fp ++ " (" ++ show (count cursor + 1)
-                      ++ "/" ++ show nrequests ++ ")...]")
-         let (fileHead, fileTail) = BL.splitAt requestSize (content cursor)
-         let args = object [ "cursor" .=
-                             object [ "session_id" .= String sessionId
-                                    , "offset" .=
-                                      (Number $ fromIntegral $ coffset cursor) ]
-                           , "close" .= (BL.null fileTail) ]
+      do let (headCursor, tailCursor) = splitCursor requestSize cursor
+         putStrLn $ ("[uploading " ++ quoteString fp ++ " to " ++ quoteString op
+                     ++ " (" ++ show (count headCursor + 1) ++ "/"
+                     ++ show nrequests ++ ")...]")
+         let args =
+               object [ "cursor" .=
+                        object [ "session_id" .= String sessionId
+                               , "offset" .=
+                                 (Number $ fromIntegral $ coffset headCursor) ]
+                      , "close" .= cursorDone tailCursor ]
          let request =
                defaultRequest
                & setRequestManager manager
@@ -220,7 +278,7 @@ uploadFile (AppState authToken manager) upload =
                   [S8.append "Bearer " authToken])
                & setRequestHeader "Dropbox-API-Arg" [BL.toStrict (encode args)]
                & setRequestHeader "Content-Type" ["application/octet-stream"]
-               & setRequestBodyLBS fileHead
+               & setRequestBodyLBS (content headCursor)
          response <- untilJust
            do jhresp <- try @JSONException $ try @HttpException
                         $ httpJSON request
@@ -237,8 +295,7 @@ uploadFile (AppState authToken manager) upload =
          when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
                              putStrLn $ show response
                              assert False $ return ()
-         return $
-           Cursor fileTail (coffset cursor + requestSize) (count cursor + 1)
+         return tailCursor
 
 
 
@@ -252,13 +309,18 @@ uploadMetadata' (AppState authToken manager) uploads =
   do mres <- liftIO finish_batch
      res <- liftIO case mres of
                      Left asyncJobId ->
-                       do threadDelay 100000 -- 100 ms
-                          untilJust $ finish_batch_check asyncJobId
+                       untilJust do threadDelay 100000 -- 100 ms
+                                    finish_batch_check asyncJobId
                      Right res -> return res
      liftIO $ putStrLn $ "[done]"
-     S.fromList uploads
+     let done = all (fromJust . success) res
+     assertM done
+     -- S.fromList uploads
+     -- res <- liftIO $ evaluate res
+     -- liftIO $ mapM_ (putStrLn . show) res
+     S.fromList res
   where
-    finish_batch :: IO (Either T.Text [()])
+    finish_batch :: IO (Either T.Text [UploadState])
     finish_batch =
       do assertM $ length uploads <= 1000
          let args =
@@ -269,8 +331,11 @@ uploadMetadata' (AppState authToken manager) uploads =
                                    , "offset" .= (fromJust $ offset upload)
                                    ]
                                  , "commit" .= object
-                                   ["path" .=
-                                    (String $ T.pack $ destPath upload)]
+                                   [ "path" .=
+                                     (String $ T.pack $ destPath upload)
+                                   , "mode" .= String "overwrite"
+                                   -- , "mute" .= Bool True
+                                   ]
                                  ]
                         | upload <- uploads
                         ]
@@ -299,15 +364,20 @@ uploadMetadata' (AppState authToken manager) uploads =
                                 threadDelay 100000 -- 100 ms
                                 return Nothing
                   Right resp -> return $ Just resp
-         assertM $ getResponseStatusCode response == 200
+         let st = getResponseStatusCode response
+         when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
+                             putStrLn $ show response
+                             assert False $ return ()
          let Object json = getResponseBody response
          let String tag = json H.! ".tag"
          if | tag == "complete"
-              -> return $ Right []
+              -> let Array entries = json H.! "entries"
+                     res = zipWith parseEntry (V.toList entries) uploads
+                 in return $ Right res
             | tag == "async_job_id"
               -> do let String asyncJobId = json H.! "async_job_id"
                     return $ Left asyncJobId
-    finish_batch_check :: T.Text -> IO (Maybe [()])
+    finish_batch_check :: T.Text -> IO (Maybe [UploadState])
     finish_batch_check asyncJobId =
       do let args = object [ "async_job_id" .= String asyncJobId ]
          let request =
@@ -334,13 +404,24 @@ uploadMetadata' (AppState authToken manager) uploads =
                                 threadDelay 100000 -- 100 ms
                                 return Nothing
                   Right resp -> return $ Just resp
-         assertM $ getResponseStatusCode response == 200
+         let st = getResponseStatusCode response
+         when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
+                             putStrLn $ show response
+                             assert False $ return ()
          let Object json = getResponseBody response
          let String tag = json H.! ".tag"
          if | tag == "complete"
-              -> return $ Just []
+              -> let Array entries = json H.! "entries"
+                     res = zipWith parseEntry (V.toList entries) uploads
+                 in return $ Just res
             | tag == "in_progress"
               -> return Nothing
+    parseEntry :: Value -> UploadState -> UploadState
+    parseEntry (Object entry) upload =
+      let String tag = entry H.! ".tag"
+          String name = entry H.! "name"
+      in (if tag /= "success" then traceShow entry else id)
+           upload { success = Just (tag == "success") }
 
  
 
@@ -366,3 +447,6 @@ fromRight' (Right x) = x
 
 -- fromStreamList :: (IsStream t, Monad m) => t m [a] -> t m a
 -- fromStreamList = S.concatMap S.fromList
+
+quoteString :: String -> String
+quoteString s = "\"" ++ s ++ "\""
