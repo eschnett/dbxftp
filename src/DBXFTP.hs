@@ -72,8 +72,17 @@ getAuthToken = do home <- getEnvDefault "HOME" ""
 
 
 
-ls :: AppState -> FilePath -> IO [FilePath]
-ls app fp =
+ls :: AppState -> [FilePath] -> IO [FilePath]
+ls app fps =
+  S.toList
+  $ asyncly
+  $ maxThreads 10
+  |$ S.concatMap (\fp -> do files <- liftIO (ls' app fp)
+                            S.fromList files)
+  |$ S.fromList fps
+
+ls' :: AppState -> FilePath -> IO [FilePath]
+ls' app fp =
   do let args = object [ "path" .= String (T.pack fp)
                        , "recursive" .= Bool False
                        ]
@@ -90,8 +99,7 @@ ls app fp =
            & setRequestHeader "Content-Type" ["application/json"]
            & setRequestBodyJSON args
      response <- untilJust
-       do jhresp <- try @JSONException $ try @HttpException
-                    $ httpJSON request
+       do jhresp <- try @JSONException $ try @HttpException $ httpJSON request
           case jhresp of
             Left ex -> do putStrLn $ show ex
                           return Nothing

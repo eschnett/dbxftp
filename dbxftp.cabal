@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 9d49708d12103ada1c87c6491f8fa86bcc5f5bba3d94f592d85e5b0fe10a428a
+-- hash: c74e2c78acdb89cc8f11f894daefac664ee8b3ff88dd985a4b68d01572ef50a8
 
 name:           dbxftp
 version:        0.0.0
@@ -68,6 +68,7 @@ executable dbxftp
   ghc-options: -fno-ignore-asserts -foptimal-applicative-do -funbox-strict-fields -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints -Wno-unused-matches -rtsopts -threaded -with-rtsopts=-N
   build-depends:
       base
+    , cmdargs
     , dbxftp
   default-language: Haskell2010
 

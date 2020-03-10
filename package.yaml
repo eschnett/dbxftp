@@ -185,6 +185,7 @@ executables:
     main: Main.hs
     dependencies:
       - base
+      - cmdargs
       - dbxftp
     ghc-options:
       - -rtsopts
