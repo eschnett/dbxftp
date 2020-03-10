@@ -154,7 +154,7 @@ traverseDirectories = S.concatMap traverseEntry
 
 traverseEntry :: UploadState -> Async UploadState
 traverseEntry upload =
-  do fs <- liftIO (getFileStatus (sourcePath upload))
+  do fs <- liftIO (getSymbolicLinkStatus (sourcePath upload))
      if | isRegularFile fs -> let sz = Just $ fromIntegral $ fileSize fs
                               in S.yield $ upload { sourceSize = sz }
         | isDirectory fs -> traverseDirectories (readDir upload)
