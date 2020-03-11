@@ -90,7 +90,7 @@ theAvailableConnection = unsafePerformIO do newMVar ()
 
 theOpenConnections :: QSemN
 {-# NOINLINE theOpenConnections #-}
-theOpenConnections = unsafePerformIO $ newQSemN 10
+theOpenConnections = unsafePerformIO $ newQSemN 100
 
 
 
@@ -391,12 +391,16 @@ uploadMetadata' :: AppState -> [UploadState] -> Serial UploadState
 uploadMetadata' app@(AppState authToken manager) uploads =
   do res <- liftIO $ bracket_ openUploadFinishConnection
                               closeUploadFinishConnection
-                              do mres <- finish_batch
-                                 case mres of
+                              do putStrLn "[finalizing upload...]"
+                                 mres <- finish_batch
+                                 res <- case mres of
                                    Left asyncJobId ->
-                                     untilJust do threadDelay 100000 -- 100 ms
+                                     untilJust do putStrLn "[waiting...]"
+                                                  threadDelay 100000 -- 100 ms
                                                   finish_batch_check asyncJobId
                                    Right res -> return res
+                                 putStrLn "[done finalizing upload]"
+                                 return res
      liftIO $ putStrLn "[done]"
      let done = all (fromJust . success) res
      assertM done
