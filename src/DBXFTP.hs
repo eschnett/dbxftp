@@ -134,12 +134,13 @@ apiCall app path args =
                    putStrLn "obj:"
                    putStrLn $ show obj
                    let Object err = obj H.! "error"
-                   assertM $ err H.! ".tag" == String "too_many_requests"
-                   let Number rateLimit' = err H.! "retry_after"
-                   putStrLn $ "rate limit': " ++ show rateLimit'
-                   let Just rateLimit = toBoundedInteger rateLimit'
-                   putStrLn $ "rate limit: " ++ show rateLimit
-                   delayConnection rateLimit
+                   let Object reason = err H.! "reason"
+                   assertM $ reason H.! ".tag" == String "too_many_requests"
+                   let Number retryAfter' = err H.! "retry_after"
+                   putStrLn $ "retry after': " ++ show retryAfter'
+                   let Just retryAfter = toBoundedInteger retryAfter'
+                   putStrLn $ "retry after: " ++ show retryAfter
+                   delayConnection retryAfter
                    return Nothing
            | st `div` 100 == 5 -- retry
              -> do putStrLn $ ("Received status code " ++ show st
@@ -191,12 +192,13 @@ sendContent app path args content =
                    putStrLn "obj:"
                    putStrLn $ show obj
                    let Object err = obj H.! "error"
-                   assertM $ err H.! ".tag" == String "too_many_requests"
-                   let Number rateLimit' = err H.! "retry_after"
-                   putStrLn $ "rate limit': " ++ show rateLimit'
-                   let Just rateLimit = toBoundedInteger rateLimit'
-                   putStrLn $ "rate limit: " ++ show rateLimit
-                   delayConnection rateLimit
+                   let Object reason = err H.! "reason"
+                   assertM $ reason H.! ".tag" == String "too_many_requests"
+                   let Number retryAfter' = err H.! "retry_after"
+                   putStrLn $ "retry after': " ++ show retryAfter'
+                   let Just retryAfter = toBoundedInteger retryAfter'
+                   putStrLn $ "retry after: " ++ show retryAfter
+                   delayConnection retryAfter
                    return Nothing
            | st `div` 100 == 5 -- retry
              -> do putStrLn $ ("Received status code " ++ show st
