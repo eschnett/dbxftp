@@ -60,7 +60,7 @@ args = modes "dbxftp" (Args Normal NoCmd) "Access DropBox from the command line"
 
 main :: IO ()
 main =
-  do putStrLn "DBXFTP"
+  do putStrLn "DBXFTP: Access DropBox via the command line"
      Args verbose cmd <- processArgs args
      case cmd of
        NoCmd -> putStrLn "No command given."

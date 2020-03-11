@@ -350,7 +350,7 @@ uploadFile app@(AppState authToken manager) upload =
                object [ "cursor" .=
                         object [ "session_id" .= String sessionId
                                , "offset" .=
-                                 (Number $ fromIntegral $ coffset headCursor) ]
+                                 Number (fromIntegral $ coffset headCursor) ]
                       , "close" .= cursorDone tailCursor ]
          Object resp <- sendContent app "/2/files/upload_session/append_v2" args
                         (content headCursor)
@@ -371,7 +371,7 @@ uploadMetadata' app@(AppState authToken manager) uploads =
                        untilJust do threadDelay 100000 -- 100 ms
                                     finish_batch_check asyncJobId
                      Right res -> return res
-     liftIO $ putStrLn $ "[done]"
+     liftIO $ putStrLn "[done]"
      let done = all (fromJust . success) res
      assertM done
      -- S.fromList uploads
@@ -386,12 +386,12 @@ uploadMetadata' app@(AppState authToken manager) uploads =
                object [ "entries" .= array
                         [ object [ "cursor" .= object
                                    [ "session_id" .=
-                                     (String $ fromJust $ sessionId upload)
-                                   , "offset" .= (fromJust $ offset upload)
+                                     String (fromJust $ sessionId upload)
+                                   , "offset" .= fromJust (offset upload)
                                    ]
                                  , "commit" .= object
                                    [ "path" .=
-                                     (String $ T.pack $ destPath upload)
+                                     String (T.pack $ destPath upload)
                                    , "mode" .= String "overwrite"
                                    -- , "mute" .= Bool True
                                    ]
