@@ -46,6 +46,14 @@ import System.Posix hiding (Null)
 
 
 
+maxOpenFiles :: Int
+maxOpenFiles = 100
+
+maxOpenConnections :: Int
+maxOpenConnections = 20
+
+
+
 -- Don't open more than 100 files simultaneously
 
 openFile :: IO ()
@@ -56,7 +64,7 @@ closeFile = signalQSemN theOpenFiles 1
 
 theOpenFiles :: QSemN
 {-# NOINLINE theOpenFiles #-}
-theOpenFiles = unsafePerformIO $ newQSemN 100
+theOpenFiles = unsafePerformIO $ newQSemN maxOpenFiles
 
 
 
@@ -90,7 +98,7 @@ theAvailableConnection = unsafePerformIO do newMVar ()
 
 theOpenConnections :: QSemN
 {-# NOINLINE theOpenConnections #-}
-theOpenConnections = unsafePerformIO $ newQSemN 100
+theOpenConnections = unsafePerformIO $ newQSemN maxOpenConnections
 
 
 
