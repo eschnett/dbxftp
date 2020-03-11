@@ -127,10 +127,16 @@ apiCall app path args =
         let body = getResponseBody resp
         if | st == 429
              -> do putStrLn $ "Exceeded rate limit, waiting..."
+                   putStrLn "body:"
+                   putStrLn $ show body
+                   putStrLn $ show (eitherDecode body :: Either String Value)
                    let Object obj = fromRight' (eitherDecode body)
+                   putStrLn "obj:"
                    putStrLn $ show obj
                    let Number rateLimit' = obj H.! "retry_after"
+                   putStrLn $ "rate limit': " ++ show rateLimit'
                    let Just rateLimit = toBoundedInteger rateLimit'
+                   putStrLn $ "rate limit: " ++ show rateLimit
                    delayConnection rateLimit
                    return Nothing
            | st `div` 100 == 5 -- retry
@@ -176,10 +182,16 @@ sendContent app path args content =
         let body = getResponseBody resp
         if | st == 429
              -> do putStrLn $ "Exceeded rate limit, waiting..."
+                   putStrLn "body:"
+                   putStrLn $ show body
+                   putStrLn $ show (eitherDecode body :: Either String Value)
                    let Object obj = fromRight' (eitherDecode body)
+                   putStrLn "obj:"
                    putStrLn $ show obj
                    let Number rateLimit' = obj H.! "retry_after"
+                   putStrLn $ "rate limit': " ++ show rateLimit'
                    let Just rateLimit = toBoundedInteger rateLimit'
+                   putStrLn $ "rate limit: " ++ show rateLimit
                    delayConnection rateLimit
                    return Nothing
            | st `div` 100 == 5 -- retry
