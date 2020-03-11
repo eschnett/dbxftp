@@ -63,20 +63,46 @@ theOpenFiles = unsafePerformIO $ newQSemN 100
 -- Don't exceed DropBox's connection rate limit
 
 openConnection :: IO ()
-openConnection = readMVar theOpenConnection
+openConnection = do waitQSemN theOpenConnections 1
+                    readMVar theAvailableConnection
+
+closeConnection :: IO ()
+closeConnection = signalQSemN theOpenConnections 1
 
 delayConnection :: Int64 -> IO ()
 delayConnection d =
   do t0 <- systemToPOSIXTime <$> getSystemTime
-     () <- takeMVar theOpenConnection
+     putStrLn $ "*** waiting for " ++ show d ++ " s"
+     putStrLn "*** waiting for lock"
+     () <- takeMVar theAvailableConnection
+     putStrLn "*** took lock"
      let t1 = t0 + fromIntegral d
      t <- systemToPOSIXTime <$> getSystemTime
-     threadDelay $ round $ 1e6 * (t1 - t)
-     putMVar theOpenConnection ()
+     let delay = round $ 1e6 * (t1 - t)
+     putStrLn $ "*** waiting for " ++ show delay ++ " us"
+     when (t1 > t) $ threadDelay delay
+     putStrLn "*** releasing lock"
+     putMVar theAvailableConnection ()
 
-theOpenConnection :: MVar ()
-{-# NOINLINE theOpenConnection #-}
-theOpenConnection = unsafePerformIO do newMVar ()
+theAvailableConnection :: MVar ()
+{-# NOINLINE theAvailableConnection #-}
+theAvailableConnection = unsafePerformIO do newMVar ()
+
+theOpenConnections :: QSemN
+{-# NOINLINE theOpenConnections #-}
+theOpenConnections = unsafePerformIO $ newQSemN 10
+
+
+
+openUploadFinishConnection :: IO ()
+openUploadFinishConnection = waitQSemN theOpenUploadFinishConnections 1
+
+closeUploadFinishConnection :: IO ()
+closeUploadFinishConnection = signalQSemN theOpenUploadFinishConnections 1
+
+theOpenUploadFinishConnections :: QSemN
+{-# NOINLINE theOpenUploadFinishConnections #-}
+theOpenUploadFinishConnections = unsafePerformIO $ newQSemN 1
 
 
 
@@ -96,8 +122,7 @@ apiCall app path args =
         & setRequestBodyJSON args
         & setRequestIgnoreStatus
   in untilJust
-     do openConnection
-        resp <- httpLBS request
+     do resp <- bracket_ openConnection closeConnection $ httpLBS request
         let st = getResponseStatusCode resp
         let body = getResponseBody resp
         if | st == 429
@@ -146,8 +171,7 @@ sendContent app path args content =
         & setRequestBodyLBS content
         & setRequestIgnoreStatus
   in untilJust
-     do openConnection
-        resp <- httpLBS request
+     do resp <- bracket_ openConnection closeConnection $ httpLBS request
         let st = getResponseStatusCode resp
         let body = getResponseBody resp
         if | st == 429
@@ -365,12 +389,14 @@ uploadMetadata app uploads =
 
 uploadMetadata' :: AppState -> [UploadState] -> Serial UploadState
 uploadMetadata' app@(AppState authToken manager) uploads =
-  do mres <- liftIO finish_batch
-     res <- liftIO case mres of
-                     Left asyncJobId ->
-                       untilJust do threadDelay 100000 -- 100 ms
-                                    finish_batch_check asyncJobId
-                     Right res -> return res
+  do res <- liftIO $ bracket_ openUploadFinishConnection
+                              closeUploadFinishConnection
+                              do mres <- finish_batch
+                                 case mres of
+                                   Left asyncJobId ->
+                                     untilJust do threadDelay 100000 -- 100 ms
+                                                  finish_batch_check asyncJobId
+                                   Right res -> return res
      liftIO $ putStrLn "[done]"
      let done = all (fromJust . success) res
      assertM done
