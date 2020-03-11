@@ -133,7 +133,9 @@ apiCall app path args =
                    let Object obj = fromRight' (eitherDecode body)
                    putStrLn "obj:"
                    putStrLn $ show obj
-                   let Number rateLimit' = obj H.! "retry_after"
+                   let Object err = obj H.! "error"
+                   assertM $ err H.! ".tag" == String "too_many_requests"
+                   let Number rateLimit' = err H.! "retry_after"
                    putStrLn $ "rate limit': " ++ show rateLimit'
                    let Just rateLimit = toBoundedInteger rateLimit'
                    putStrLn $ "rate limit: " ++ show rateLimit
@@ -188,7 +190,9 @@ sendContent app path args content =
                    let Object obj = fromRight' (eitherDecode body)
                    putStrLn "obj:"
                    putStrLn $ show obj
-                   let Number rateLimit' = obj H.! "retry_after"
+                   let Object err = obj H.! "error"
+                   assertM $ err H.! ".tag" == String "too_many_requests"
+                   let Number rateLimit' = err H.! "retry_after"
                    putStrLn $ "rate limit': " ++ show rateLimit'
                    let Just rateLimit = toBoundedInteger rateLimit'
                    putStrLn $ "rate limit: " ++ show rateLimit
@@ -413,7 +417,6 @@ uploadMetadata' app@(AppState authToken manager) uploads =
                                    Right res -> return res
                                  putStrLn "[done finalizing upload]"
                                  return res
-     liftIO $ putStrLn "[done]"
      let done = all (fromJust . success) res
      assertM done
      -- S.fromList uploads
