@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: c74e2c78acdb89cc8f11f894daefac664ee8b3ff88dd985a4b68d01572ef50a8
+-- hash: b7a0da4f89a1f5e6122326513d40248062190e912a84ee51e539800980939fe2
 
 name:           dbxftp
 version:        0.0.0
@@ -52,6 +52,7 @@ library
     , scientific
     , streamly
     , text
+    , time
     , unix
     , unordered-containers
     , vector

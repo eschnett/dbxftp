@@ -14,6 +14,7 @@ module DBXFTP
   ) where
 
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.MVar
 import Control.Concurrent.QSemN
 import Control.Exception
 import Control.Monad
@@ -27,7 +28,10 @@ import Data.Function ((&))
 import qualified Data.HashMap.Strict as H
 import Data.Int
 import Data.Maybe
+import Data.Scientific
 import qualified Data.Text as T
+import Data.Time.Clock.POSIX
+import Data.Time.Clock.System
 import qualified Data.Vector as V
 import Debug.Trace
 import Network.HTTP.Client hiding (fileSize)
@@ -42,6 +46,8 @@ import System.Posix hiding (Null)
 
 
 
+-- Don't open more than 100 files simultaneously
+
 openFile :: IO ()
 openFile = waitQSemN theOpenFiles 1
 
@@ -51,6 +57,131 @@ closeFile = signalQSemN theOpenFiles 1
 theOpenFiles :: QSemN
 {-# NOINLINE theOpenFiles #-}
 theOpenFiles = unsafePerformIO $ newQSemN 100
+
+
+
+-- Don't exceed DropBox's connection rate limit
+
+openConnection :: IO ()
+openConnection = readMVar theOpenConnection
+
+delayConnection :: Int64 -> IO ()
+delayConnection d =
+  do t0 <- systemToPOSIXTime <$> getSystemTime
+     () <- takeMVar theOpenConnection
+     let t1 = t0 + fromIntegral d
+     t <- systemToPOSIXTime <$> getSystemTime
+     threadDelay $ round $ 1e6 * (t1 - t)
+     putMVar theOpenConnection ()
+
+theOpenConnection :: MVar ()
+{-# NOINLINE theOpenConnection #-}
+theOpenConnection = unsafePerformIO do newMVar ()
+
+
+
+apiCall :: AppState -> S8.ByteString -> Value -> IO Value
+apiCall app path args =
+  let request =
+        defaultRequest
+        & setRequestManager (manager app)
+        & setRequestSecure True
+        & setRequestHost "api.dropboxapi.com"
+        & setRequestPort 443
+        & setRequestMethod "POST"
+        & setRequestPath path
+        & (addRequestHeader "Authorization"
+           (S8.append "Bearer " (authToken app)))
+        & addRequestHeader "Content-Type" "application/json"
+        & setRequestBodyJSON args
+        & setRequestIgnoreStatus
+  in untilJust
+     do openConnection
+        resp <- httpLBS request
+        let st = getResponseStatusCode resp
+        let body = getResponseBody resp
+        if | st == 429
+             -> do putStrLn $ "Exceeded rate limit, waiting..."
+                   let Object obj = fromRight' (eitherDecode body)
+                   putStrLn $ show obj
+                   let Number rateLimit' = obj H.! "retry_after"
+                   let Just rateLimit = toBoundedInteger rateLimit'
+                   delayConnection rateLimit
+                   return Nothing
+           | st `div` 100 == 5 -- retry
+             -> do putStrLn $ ("Received status code " ++ show st
+                               ++ ", retrying...")
+                   putStrLn $ show resp
+                   return Nothing
+           | st `div` 100 /= 2 -- abort
+             -> do putStrLn $ ("Received status code " ++ show st
+                               ++ ", aborting")
+                   putStrLn $ show resp
+                   let ex = StatusCodeException (void resp) (BL.toStrict body)
+                   throw $ HttpExceptionRequest request ex
+           | True
+             -> do let retval = eitherDecode body
+                   case retval of
+                     Left err -> do putStrLn "JSON parse error"
+                                    putStrLn $ show err
+                                    -- throw $ JSONParseException request (void resp) err
+                                    -- throw $ JSONConversionException request resp err
+                                    throw $ AssertionFailed err
+                     Right val -> return $ Just val
+
+sendContent :: AppState -> S8.ByteString -> Value -> BL.ByteString -> IO Value
+sendContent app path args content =
+  let request =
+        defaultRequest
+        & setRequestManager (manager app)
+        & setRequestSecure True
+        & setRequestHost "content.dropboxapi.com"
+        & setRequestPort 443
+        & setRequestMethod "POST"
+        & setRequestPath path
+        & (addRequestHeader "Authorization"
+           (S8.append "Bearer " (authToken app)))
+        & addRequestHeader "Dropbox-API-Arg" (BL.toStrict (encode args))
+        & addRequestHeader "Content-Type" "application/octet-stream"
+        & setRequestBodyLBS content
+        & setRequestIgnoreStatus
+  in untilJust
+     do openConnection
+        resp <- httpLBS request
+        let st = getResponseStatusCode resp
+        let body = getResponseBody resp
+        if | st == 429
+             -> do putStrLn $ "Exceeded rate limit, waiting..."
+                   let Object obj = fromRight' (eitherDecode body)
+                   putStrLn $ show obj
+                   let Number rateLimit' = obj H.! "retry_after"
+                   let Just rateLimit = toBoundedInteger rateLimit'
+                   delayConnection rateLimit
+                   return Nothing
+           | st `div` 100 == 5 -- retry
+             -> do putStrLn $ ("Received status code " ++ show st
+                               ++ ", retrying...")
+                   putStrLn $ show resp
+                   return Nothing
+           | st `div` 100 /= 2 -- abort
+             -> do putStrLn $ ("Received status code " ++ show st
+                               ++ ", aborting")
+                   putStrLn $ show resp
+                   let ex = StatusCodeException (void resp) (BL.toStrict body)
+                   throw $ HttpExceptionRequest request ex
+           | True
+             -> do let retval = eitherDecode body
+                   case retval of
+                     Left err -> do putStrLn "JSON parse error"
+                                    putStrLn $ show err
+                                    -- throw $ JSONParseException request (void resp) err
+                                    -- throw $ JSONConversionException request resp err
+                                    throw $ AssertionFailed err
+                     Right val -> return $ Just val
+
+
+
+-- recvContent :: 
 
 
 
@@ -86,34 +217,8 @@ ls' app fp =
   do let args = object [ "path" .= String (T.pack fp)
                        , "recursive" .= Bool False
                        ]
-     let request =
-           defaultRequest
-           & setRequestManager (manager app)
-           & setRequestSecure True
-           & setRequestHost "api.dropboxapi.com"
-           & setRequestPort 443
-           & setRequestMethod "POST"
-           & setRequestPath "/2/files/list_folder"
-           & (setRequestHeader "Authorization"
-              [S8.append "Bearer " (authToken app)])
-           & setRequestHeader "Content-Type" ["application/json"]
-           & setRequestBodyJSON args
-     response <- untilJust
-       do jhresp <- try @JSONException $ try @HttpException $ httpJSON request
-          case jhresp of
-            Left ex -> do putStrLn $ show ex
-                          return Nothing
-            Right hresp -> case hresp of
-              Left ex -> do putStrLn $ show ex
-                            threadDelay 100000 -- 100 ms
-                            return Nothing
-              Right resp -> return $ Just resp
-     let st = getResponseStatusCode response
-     when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
-                         putStrLn $ show response
-                         assert False $ return ()
-     let Object json = getResponseBody response
-     let Array entries = json H.! "entries"
+     Object resp <- apiCall app "/2/files/list_folder" args 
+     let Array entries = resp H.! "entries"
      return $ fmap parseEntry (V.toList entries)
   where parseEntry :: Value -> FilePath
         parseEntry (Object entry) = let String name = entry H.! "name"
@@ -205,7 +310,7 @@ cursorDone :: Cursor -> Bool
 cursorDone cursor = BL.null (content cursor)
 
 uploadFile :: AppState -> UploadState -> IO UploadState
-uploadFile (AppState authToken manager) upload =
+uploadFile app@(AppState authToken manager) upload =
   do openFile
      file <- BL.readFile fp
      -- TODO: Should we be running upload sessions in parallel?
@@ -231,36 +336,9 @@ uploadFile (AppState authToken manager) upload =
                      ++ show nrequests ++ ")...]")
          let args = object ["close" .= cursorDone tailCursor]
          assertM $ coffset headCursor == 0
-         let request =
-               defaultRequest
-               & setRequestManager manager
-               & setRequestSecure True
-               & setRequestHost "content.dropboxapi.com"
-               & setRequestPort 443
-               & setRequestMethod "POST"
-               & setRequestPath "/2/files/upload_session/start"
-               & (setRequestHeader "Authorization"
-                  [S8.append "Bearer " authToken])
-               & setRequestHeader "Dropbox-API-Arg" [BL.toStrict (encode args)]
-               & setRequestHeader "Content-Type" ["application/octet-stream"]
-               & setRequestBodyLBS (content headCursor)
-         response <- untilJust
-           do jhresp <- try @JSONException $ try @HttpException
-                        $ httpJSON request
-              case jhresp of
-                Left ex -> do putStrLn $ show ex
-                              return Nothing
-                Right hresp -> case hresp of
-                  Left ex -> do putStrLn $ show ex
-                                threadDelay 100000 -- 100 ms
-                                return Nothing
-                  Right resp -> return $ Just resp
-         let st = getResponseStatusCode response
-         when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
-                             putStrLn $ show response
-                             assert False $ return ()
-         let Object json = getResponseBody response
-         let String sessionId = json H.! "session_id"
+         Object resp <- sendContent app "/2/files/upload_session/start" args
+                        (content headCursor)
+         let String sessionId = resp H.! "session_id"
          return (sessionId, tailCursor)
     upload_session_append :: T.Text -> Cursor -> IO Cursor
     upload_session_append sessionId cursor =
@@ -274,35 +352,8 @@ uploadFile (AppState authToken manager) upload =
                                , "offset" .=
                                  (Number $ fromIntegral $ coffset headCursor) ]
                       , "close" .= cursorDone tailCursor ]
-         let request =
-               defaultRequest
-               & setRequestManager manager
-               & setRequestSecure True
-               & setRequestHost "content.dropboxapi.com"
-               & setRequestPort 443
-               & setRequestMethod "POST"
-               & setRequestPath "/2/files/upload_session/append_v2"
-               & (setRequestHeader "Authorization"
-                  [S8.append "Bearer " authToken])
-               & setRequestHeader "Dropbox-API-Arg" [BL.toStrict (encode args)]
-               & setRequestHeader "Content-Type" ["application/octet-stream"]
-               & setRequestBodyLBS (content headCursor)
-         response <- untilJust
-           do jhresp <- try @JSONException $ try @HttpException
-                        $ httpJSON request
-              case jhresp of
-                Left ex -> do putStrLn $ show ex
-                              return Nothing
-                Right hresp -> case hresp of
-                  Left ex -> do putStrLn $ show ex
-                                threadDelay 100000 -- 100 ms
-                                return Nothing
-                  Right resp -> return $ Just resp
-         let _ = response :: Response Value
-         let st = getResponseStatusCode response
-         when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
-                             putStrLn $ show response
-                             assert False $ return ()
+         Object resp <- sendContent app "/2/files/upload_session/append_v2" args
+                        (content headCursor)
          return tailCursor
 
 
@@ -313,7 +364,7 @@ uploadMetadata app uploads =
   in serially (uploadMetadata' app =<< chunks)
 
 uploadMetadata' :: AppState -> [UploadState] -> Serial UploadState
-uploadMetadata' (AppState authToken manager) uploads =
+uploadMetadata' app@(AppState authToken manager) uploads =
   do mres <- liftIO finish_batch
      res <- liftIO case mres of
                      Left asyncJobId ->
@@ -348,78 +399,23 @@ uploadMetadata' (AppState authToken manager) uploads =
                         | upload <- uploads
                         ]
                       ]
-         let request =
-               defaultRequest
-               & setRequestManager manager
-               & setRequestSecure True
-               & setRequestHost "api.dropboxapi.com"
-               & setRequestPort 443
-               & setRequestMethod "POST"
-               & setRequestPath "/2/files/upload_session/finish_batch"
-               & (setRequestHeader "Authorization"
-                  [S8.append "Bearer " authToken])
-               & setRequestHeader "Content-Type" ["application/json"]
-               & setRequestBodyLBS (encode args)
-         liftIO $ putStrLn $ "[finalizing...]"
-         response <- untilJust
-           do jhresp <- try @JSONException $ try @HttpException
-                        $ httpJSON request
-              case jhresp of
-                Left ex -> do putStrLn $ show ex
-                              return Nothing
-                Right hresp -> case hresp of
-                  Left ex -> do putStrLn $ show ex
-                                threadDelay 100000 -- 100 ms
-                                return Nothing
-                  Right resp -> return $ Just resp
-         let st = getResponseStatusCode response
-         when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
-                             putStrLn $ show response
-                             assert False $ return ()
-         let Object json = getResponseBody response
-         let String tag = json H.! ".tag"
+         Object resp <- apiCall app "/2/files/upload_session/finish_batch" args
+         let String tag = resp H.! ".tag"
          if | tag == "complete"
-              -> let Array entries = json H.! "entries"
+              -> let Array entries = resp H.! "entries"
                      res = zipWith parseEntry (V.toList entries) uploads
                  in return $ Right res
             | tag == "async_job_id"
-              -> do let String asyncJobId = json H.! "async_job_id"
+              -> do let String asyncJobId = resp H.! "async_job_id"
                     return $ Left asyncJobId
     finish_batch_check :: T.Text -> IO (Maybe [UploadState])
     finish_batch_check asyncJobId =
       do let args = object [ "async_job_id" .= String asyncJobId ]
-         let request =
-               defaultRequest
-               & setRequestManager manager
-               & setRequestSecure True
-               & setRequestHost "api.dropboxapi.com"
-               & setRequestPort 443
-               & setRequestMethod "POST"
-               & setRequestPath "/2/files/upload_session/finish_batch/check"
-               & (setRequestHeader "Authorization"
-                  [S8.append "Bearer " authToken])
-               & setRequestHeader "Content-Type" ["application/json"]
-               & setRequestBodyJSON args
-         liftIO $ putStrLn $ "[waiting...]"
-         response <- untilJust
-           do jhresp <- try @JSONException $ try @HttpException
-                        $ httpJSON request
-              case jhresp of
-                Left ex -> do putStrLn $ show ex
-                              return Nothing
-                Right hresp -> case hresp of
-                  Left ex -> do putStrLn $ show ex
-                                threadDelay 100000 -- 100 ms
-                                return Nothing
-                  Right resp -> return $ Just resp
-         let st = getResponseStatusCode response
-         when (st /= 200) do putStrLn $ "Received statusCode " ++ show st
-                             putStrLn $ show response
-                             assert False $ return ()
-         let Object json = getResponseBody response
-         let String tag = json H.! ".tag"
+         Object resp <- apiCall app "/2/files/upload_session/finish_batch/check"
+                        args
+         let String tag = resp H.! ".tag"
          if | tag == "complete"
-              -> let Array entries = json H.! "entries"
+              -> let Array entries = resp H.! "entries"
                      res = zipWith parseEntry (V.toList entries) uploads
                  in return $ Just res
             | tag == "in_progress"
