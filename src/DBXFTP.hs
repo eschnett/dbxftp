@@ -2,6 +2,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
 -- <https://www.dropbox.com/developers/documentation/http/overview>
@@ -24,6 +25,7 @@ import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as BL
 import Data.Aeson
 import Data.Aeson.Types (listValue)
+import Data.Either.Extra (eitherToMaybe)
 import Data.Function ((&))
 import qualified Data.HashMap.Strict as H
 import Data.Int
@@ -229,9 +231,21 @@ sendContent app path args content =
                                     throw $ AssertionFailed err
                      Right val -> return $ Just val
 
-
-
 -- recvContent :: 
+
+tryHttp :: forall a.
+           (Int -> Value -> Maybe a) -> IO Value -> IO (Either a Value)
+tryHttp test val = tryJust test' val
+  where test' :: HttpException -> Maybe a
+        test' (HttpExceptionRequest _req ex) =
+          case ex of
+            StatusCodeException resp body ->
+              let st = getResponseStatusCode resp
+                  mobj = eitherDecode (BL.fromStrict body)
+              in case mobj of
+                Left _err -> Nothing
+                Right obj -> test st obj
+            _ -> Nothing
 
 
 
@@ -284,6 +298,7 @@ put app fps op =
   $ maxThreads 10
   |$ uploadMetadata app
   |$ uploadFiles app
+  |$ filterOutExistingFiles app
   |$ traverseDirectories
   |$ S.fromList [uploadState fp op | fp <- fps]
 
@@ -336,6 +351,101 @@ listDir dp = S.bracket open close read
         read ds = S.filter (\fn -> fn /= "." && fn /= "..")
                   $ S.takeWhile (not . null)
                   $ S.repeatM (readDirStream ds)
+
+
+
+filterOutExistingFiles :: AppState -> Async UploadState -> Async UploadState
+filterOutExistingFiles app upload = upload >>= filterOutExistingFile app
+
+filterOutExistingFile :: AppState -> UploadState -> Async UploadState
+filterOutExistingFile app upload =
+  do let fp = destPath upload
+     mmd <- getMetadata app fp
+     case mmd of
+       Nothing -> S.yield upload
+       Just _ -> do liftIO $ putStrLn ("[skipping existing file "
+                                       ++ quoteString fp ++ "]")
+                    S.nil
+
+
+
+data Metadata = FileMetadata { name :: T.Text
+                             , identifier :: T.Text
+                             , size :: Int64
+                             , pathLower :: Maybe T.Text
+                             , pathDisplay :: Maybe T.Text
+                             , symlinkInfo :: Maybe SymlinkInfo
+                             , contentHash :: T.Text
+                             }
+              | FolderMetadata { name :: T.Text
+                               , identifier :: T.Text
+                               , pathLower :: Maybe T.Text
+                               , pathDisplay :: Maybe T.Text
+                               }
+              | DeletedMetadata { name :: T.Text
+                                , pathLower :: Maybe T.Text
+                                , pathDisplay :: Maybe T.Text
+                                }
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON Metadata where
+  parseJSON = withObject "Metadata"
+    \v -> do let String tag = v H.! ".tag"
+             case tag of
+               "file" -> FileMetadata
+                         <$> v .: "name"
+                         <*> v .: "id"
+                         <*> v .: "size"
+                         <*> v .: "path_lower"
+                         <*> v .: "path_display"
+                         <*> v .: "symlink_info"
+                         <*> v .: "content_hash"
+               "folder" -> FolderMetadata
+                           <$> v .: "name"
+                           <*> v .: "id"
+                           <*> v .: "path_lower"
+                           <*> v .: "path_display"
+               "deleted" -> DeletedMetadata
+                            <$> v .: "name"
+                            <*> v .: "path_lower"
+                            <*> v .: "path_display"
+
+data SymlinkInfo = SymlinkInfo { target :: T.Text }
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON SymlinkInfo where
+  parseJSON = withObject "SymlinkInfo"
+    \v -> SymlinkInfo <$> v .: "target"
+
+getMetadata :: AppState -> FilePath -> Async (Maybe Metadata)
+getMetadata app fp =
+  do let args = object [ "path" .= String (T.pack fp) ]
+     mresp <- liftIO
+              $ tryHttp handleNotFound
+              $ apiCall app "/2/files/get_metadata" args
+     case mresp of
+       Left _ -> S.yield Nothing
+       Right resp ->
+         do let mmd = fromJSON resp :: Result Metadata
+            case mmd of
+              Error _ -> S.yield Nothing
+              Success md -> S.yield $ Just md
+  where handleNotFound :: Int -> Value -> Maybe ()
+        handleNotFound st val =
+          do guard $ st == 409
+             obj <- fromObject val
+             err <- H.lookup "error" obj
+             err <- fromObject err
+             tag <- H.lookup ".tag" err
+             guard $ tag == String "path"
+             path <- H.lookup "path" err
+             path <- fromObject path
+             tag <- H.lookup ".tag" path
+             guard $ tag == String "not_found"
+             return ()
+        fromObject :: Value -> Maybe Object
+        fromObject (Object obj) = Just obj
+        fromObject _ = Nothing
 
 
 
