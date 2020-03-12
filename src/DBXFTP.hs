@@ -25,7 +25,6 @@ import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as BL
 import Data.Aeson
 import Data.Aeson.Types (listValue)
-import Data.Either.Extra (eitherToMaybe)
 import Data.Function ((&))
 import qualified Data.HashMap.Strict as H
 import Data.Int
@@ -396,19 +395,19 @@ instance FromJSON Metadata where
                          <$> v .: "name"
                          <*> v .: "id"
                          <*> v .: "size"
-                         <*> v .: "path_lower"
-                         <*> v .: "path_display"
-                         <*> v .: "symlink_info"
+                         <*> v .:? "path_lower"
+                         <*> v .:? "path_display"
+                         <*> v .:? "symlink_info"
                          <*> v .: "content_hash"
                "folder" -> FolderMetadata
                            <$> v .: "name"
                            <*> v .: "id"
-                           <*> v .: "path_lower"
-                           <*> v .: "path_display"
+                           <*> v .:? "path_lower"
+                           <*> v .:? "path_display"
                "deleted" -> DeletedMetadata
                             <$> v .: "name"
-                            <*> v .: "path_lower"
-                            <*> v .: "path_display"
+                            <*> v .:? "path_lower"
+                            <*> v .:? "path_display"
 
 data SymlinkInfo = SymlinkInfo { target :: T.Text }
   deriving (Eq, Ord, Read, Show)
@@ -428,20 +427,30 @@ getMetadata app fp =
        Right resp ->
          do let mmd = fromJSON resp :: Result Metadata
             case mmd of
-              Error _ -> S.yield Nothing
               Success md -> S.yield $ Just md
   where handleNotFound :: Int -> Value -> Maybe ()
         handleNotFound st val =
-          do guard $ st == 409
+          do traceShow "aaa" $ return $ Just ()
+             guard $ st == 409
+             traceShow "bbb" $ return $ Just ()
              obj <- fromObject val
+             traceShow "ccc" $ return $ Just ()
              err <- H.lookup "error" obj
+             traceShow "ddd" $ return $ Just ()
              err <- fromObject err
+             traceShow "eee" $ return $ Just ()
              tag <- H.lookup ".tag" err
+             traceShow "fff" $ return $ Just ()
              guard $ tag == String "path"
+             traceShow "ggg" $ return $ Just ()
              path <- H.lookup "path" err
+             traceShow "hhh" $ return $ Just ()
              path <- fromObject path
+             traceShow "iii" $ return $ Just ()
              tag <- H.lookup ".tag" path
+             traceShow "jjj" $ return $ Just ()
              guard $ tag == String "not_found"
+             traceShow "kkk" $ return $ Just ()
              return ()
         fromObject :: Value -> Maybe Object
         fromObject (Object obj) = Just obj
@@ -470,7 +479,7 @@ cursorDone :: Cursor -> Bool
 cursorDone cursor = BL.null (content cursor)
 
 uploadFile :: AppState -> UploadState -> IO UploadState
-uploadFile app@(AppState authToken manager) upload =
+uploadFile app upload =
   do openFile
      file <- BL.readFile fp
      -- TODO: Should we be running upload sessions in parallel?
@@ -520,11 +529,11 @@ uploadFile app@(AppState authToken manager) upload =
 
 uploadMetadata :: AppState -> Async UploadState -> Async UploadState
 uploadMetadata app uploads =
-  let chunks = asyncly (S.chunksOf 1000 toList uploads)
-  in serially (uploadMetadata' app =<< chunks)
+  let chunks = S.chunksOf 1000 toList uploads
+  in uploadMetadata' app =<< chunks
 
-uploadMetadata' :: AppState -> [UploadState] -> Serial UploadState
-uploadMetadata' app@(AppState authToken manager) uploads =
+uploadMetadata' :: AppState -> [UploadState] -> Async UploadState
+uploadMetadata' app uploads =
   do res <- liftIO $ bracket_ openUploadFinishConnection
                               closeUploadFinishConnection
                               do putStrLn "[finalizing upload...]"
