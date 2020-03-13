@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: b7a0da4f89a1f5e6122326513d40248062190e912a84ee51e539800980939fe2
+-- hash: 5c27ae8905faa47b77c046a7c4ba101bbbbae0a4e1abb1cafacc33c50693cee3
 
 name:           dbxftp
 version:        0.0.0
@@ -33,6 +33,9 @@ source-repository head
 library
   exposed-modules:
       DBXFTP
+      Network.Dropbox.API
+      Network.Dropbox.API.Basic
+      Network.Dropbox.CLI
   other-modules:
       Paths_dbxftp
   hs-source-dirs:
@@ -43,6 +46,7 @@ library
       aeson
     , base
     , bytestring
+    , cmdargs
     , extra
     , filepath
     , http-client
@@ -69,7 +73,6 @@ executable dbxftp
   ghc-options: -fno-ignore-asserts -foptimal-applicative-do -funbox-strict-fields -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints -Wno-unused-matches -rtsopts -threaded -with-rtsopts=-N
   build-depends:
       base
-    , cmdargs
     , dbxftp
   default-language: Haskell2010
 

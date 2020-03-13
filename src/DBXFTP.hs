@@ -53,6 +53,9 @@ maxOpenFiles = 100
 maxOpenConnections :: Int
 maxOpenConnections = 20
 
+maxFileRate :: Double
+maxFileRate = 10
+
 
 
 -- Don't open more than 100 files simultaneously
@@ -81,16 +84,11 @@ closeConnection = signalQSemN theOpenConnections 1
 delayConnection :: Int64 -> IO ()
 delayConnection d =
   do t0 <- systemToPOSIXTime <$> getSystemTime
-     putStrLn $ "*** waiting for " ++ show d ++ " s"
-     putStrLn "*** waiting for lock"
      () <- takeMVar theAvailableConnection
-     putStrLn "*** took lock"
      let t1 = t0 + fromIntegral d
      t <- systemToPOSIXTime <$> getSystemTime
      let delay = round $ 1e6 * (t1 - t)
-     putStrLn $ "*** waiting for " ++ show delay ++ " us"
      when (t1 > t) $ threadDelay delay
-     putStrLn "*** releasing lock"
      putMVar theAvailableConnection ()
 
 theAvailableConnection :: MVar ()
@@ -135,20 +133,14 @@ apiCall app path args =
         let st = getResponseStatusCode resp
         let body = getResponseBody resp
         if | st == 429
-             -> do putStrLn $ "Exceeded rate limit, waiting..."
-                   putStrLn "body:"
-                   putStrLn $ show body
-                   putStrLn $ show (eitherDecode body :: Either String Value)
-                   let Object obj = fromRight' (eitherDecode body)
-                   putStrLn "obj:"
-                   putStrLn $ show obj
+             -> do let Object obj = fromRight' (eitherDecode body)
                    let Object err = obj H.! "error"
                    let Object reason = err H.! "reason"
                    assertM $ reason H.! ".tag" == String "too_many_requests"
                    let Number retryAfter' = err H.! "retry_after"
-                   putStrLn $ "retry after': " ++ show retryAfter'
                    let Just retryAfter = toBoundedInteger retryAfter'
-                   putStrLn $ "retry after: " ++ show retryAfter
+                   putStrLn ("Exceeded rate limit, waiting for "
+                             ++ show retryAfter ++ " s...")
                    delayConnection retryAfter
                    return Nothing
            | st `div` 100 == 5 -- retry
@@ -293,10 +285,11 @@ put :: AppState -> [FilePath] -> FilePath -> IO ()
 put app fps op =
   S.drain
   $ asyncly
-  -- $ maxBuffer 1000
-  $ maxThreads 10
+  $ maxBuffer 1000
+  |$ maxThreads 10
   |$ uploadMetadata app
   |$ uploadFiles app
+  |$ constRate maxFileRate
   |$ filterOutExistingFiles app
   |$ traverseDirectories
   |$ S.fromList [uploadState fp op | fp <- fps]
@@ -356,6 +349,9 @@ listDir dp = S.bracket open close read
 filterOutExistingFiles :: AppState -> Async UploadState -> Async UploadState
 filterOutExistingFiles app upload = upload >>= filterOutExistingFile app
 
+-- TODO: use "/2/files/list_folder" instead of getMetadata
+-- then remove rate limiting
+-- possibly also concurrent connection limit
 filterOutExistingFile :: AppState -> UploadState -> Async UploadState
 filterOutExistingFile app upload =
   do let fp = destPath upload
@@ -430,27 +426,16 @@ getMetadata app fp =
               Success md -> S.yield $ Just md
   where handleNotFound :: Int -> Value -> Maybe ()
         handleNotFound st val =
-          do traceShow "aaa" $ return $ Just ()
-             guard $ st == 409
-             traceShow "bbb" $ return $ Just ()
+          do guard $ st == 409
              obj <- fromObject val
-             traceShow "ccc" $ return $ Just ()
              err <- H.lookup "error" obj
-             traceShow "ddd" $ return $ Just ()
              err <- fromObject err
-             traceShow "eee" $ return $ Just ()
              tag <- H.lookup ".tag" err
-             traceShow "fff" $ return $ Just ()
              guard $ tag == String "path"
-             traceShow "ggg" $ return $ Just ()
              path <- H.lookup "path" err
-             traceShow "hhh" $ return $ Just ()
              path <- fromObject path
-             traceShow "iii" $ return $ Just ()
              tag <- H.lookup ".tag" path
-             traceShow "jjj" $ return $ Just ()
              guard $ tag == String "not_found"
-             traceShow "kkk" $ return $ Just ()
              return ()
         fromObject :: Value -> Maybe Object
         fromObject (Object obj) = Just obj
