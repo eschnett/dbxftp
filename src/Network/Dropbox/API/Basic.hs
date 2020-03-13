@@ -9,7 +9,7 @@ module Network.Dropbox.API.Basic
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
-import Control.Monad.Loops (untilJust)
+import Control.Monad.Loops
 import Data.Aeson
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -20,7 +20,6 @@ import Data.Scientific
 import qualified Data.Text.Encoding as T
 import Data.Time.Clock.POSIX
 import Data.Time.Clock.System
-import Debug.Trace
 import Network.HTTP.Client hiding (Manager, newManager)
 import qualified Network.HTTP.Client as NC
 import Network.HTTP.Client.TLS
@@ -46,7 +45,7 @@ newManager = Manager
              <*> newQSem maxOpenConnections
              <*> newMVar ()
 
--- no Read/Show instance to prevent accidental disclosure
+-- no Read/Show instances to prevent accidental disclosure of token
 newtype AccessTokenFile = AccessTokenFile BS.ByteString
   deriving (Eq, Ord)
 
@@ -90,53 +89,49 @@ dbxCall :: (ToJSON arg, FromJSON result)
         => BS.ByteString -> ArgLoc -> ResLoc
         -> Manager -> BS.ByteString -> arg
         -> BL.ByteString -> IO (result, BL.ByteString)
-dbxCall host argLoc resLoc mgr path arg input =
-  do let request =
-           basicRequest
-           & (if argLoc == ArgHeader
-              then addRequestHeader
-                   "Dropbox-API-Arg" (BL.toStrict (encode arg))
-              else id)
-           & addRequestHeader "Content-Type" "application/octet-stream"
-           & (if argLoc == ArgHeader
-              then setRequestBodyLBS input
-              else assert (BL.null input) $ setRequestBodyJSON arg)
-     response <- untilJust $ checkedHttp request
-     let body = getResponseBody response :: BL.ByteString
-     let result = if resLoc == ResHeader
-                  then BL.fromStrict $ head
-                       $ getResponseHeader "Dropbox-API-Result" response
-                  else body
-     result <- case eitherDecode result of
-                   Left err -> do putStrLn "JSON parse error"
-                                  putStrLn $ show err
-                                  throw $ AssertionFailed err
-                   Right result -> return result
-     let output = if resLoc == ResHeader then body else BL.empty
-     return (result, output)
+dbxCall host argLoc resLoc mgr path arg input = do
+  let request =
+        basicRequest
+        & (if argLoc == ArgHeader
+           then addRequestHeader "Dropbox-API-Arg" (BL.toStrict (encode arg))
+           else id)
+        & addRequestHeader "Content-Type" "application/octet-stream"
+        & (if argLoc == ArgHeader
+           then setRequestBodyLBS input
+           else assert (BL.null input) $ setRequestBodyJSON arg)
+  response <- untilJust $ checkedHttp request
+  let body = getResponseBody response :: BL.ByteString
+  let result = if resLoc == ResHeader
+               then BL.fromStrict $ head
+                    $ getResponseHeader "Dropbox-API-Result" response
+               else body
+  result <- case eitherDecode result of
+    Left err -> do putStrLn "JSON parse error"
+                   putStrLn $ show err
+                   throw $ AssertionFailed err
+    Right result -> return result
+  let output = if resLoc == ResHeader then body else BL.empty
+  return (result, output)
   where
     checkedHttp :: Request -> IO (Maybe (Response BL.ByteString))
-    checkedHttp request =
-      do response <-
-           bracket_ (waitOpenConnection mgr) (signalOpenConnection mgr)
-           $ httpLBS request
-         let st = getResponseStatusCode response
-         let body = getResponseBody response
-         if | st == 429
-              -> do putStrLn "Exceeded rate limit"
-                    flagRateLimit body
-                    return Nothing
-            | st `div` 100 == 5 -- retry
-              -> do putStrLn $ ("Received status code " ++ show st
-                                ++ ", retrying...")
-                    return Nothing
-            | st `div` 100 /= 2 -- abort
-              -> do putStrLn $ ("Received status code " ++ show st
-                                ++ ", aborting")
-                    let ex = StatusCodeException
-                             (void response) (BL.toStrict body)
-                    throw $ HttpExceptionRequest request ex
-            | True -> return $ Just response
+    checkedHttp request = do
+      response <-
+        bracket_ (waitOpenConnection mgr) (signalOpenConnection mgr)
+        $ httpLBS request
+      let st = getResponseStatusCode response
+      let body = getResponseBody response
+      if | st == 429 -> do
+             putStrLn "Exceeded rate limit"
+             flagRateLimit body
+             return Nothing
+         | st `div` 100 == 5 -> do -- retry
+             putStrLn $ "Received status code " ++ show st ++ ", retrying..."
+             return Nothing
+         | st `div` 100 /= 2 -> do -- abort
+             putStrLn $ "Received status code " ++ show st ++ ", aborting"
+             let ex = StatusCodeException (void response) (BL.toStrict body)
+             throw $ HttpExceptionRequest request ex
+         | True -> return $ Just response
     basicRequest :: Request
     basicRequest =
       defaultRequest
@@ -149,25 +144,25 @@ dbxCall host argLoc resLoc mgr path arg input =
       & addRequestHeader "Authorization" (BS.append "Bearer " (accessToken mgr))
       & setRequestIgnoreStatus
     flagRateLimit :: BL.ByteString -> IO ()
-    flagRateLimit body =
-      do let delay = case decodeRateLimit body of
-               Nothing -> 60
-               Just retryAfter -> retryAfter
-         delayConnection mgr delay
+    flagRateLimit body = do
+      let delay = case decodeRateLimit body of
+            Nothing -> 60
+            Just retryAfter -> retryAfter
+      delayConnection mgr delay
     decodeRateLimit :: BL.ByteString -> Maybe Int64
-    decodeRateLimit body =
-      do obj <- decode body
-         obj <- fromObject obj
-         error <- H.lookup "error" obj
-         error <- fromObject error
-         reason <- H.lookup "reason" error
-         reason <- fromObject reason
-         tag <- H.lookup ".tag" reason
-         guard $ tag == String "too_many_requests"
-         retryAfter <- H.lookup "retry_after" error
-         retryAfter <- fromNumber retryAfter
-         retryAfter <- toBoundedInteger retryAfter
-         return retryAfter
+    decodeRateLimit body = do
+      obj <- decode body
+      obj <- fromObject obj
+      error <- H.lookup "error" obj
+      error <- fromObject error
+      reason <- H.lookup "reason" error
+      reason <- fromObject reason
+      tag <- H.lookup ".tag" reason
+      guard $ tag == String "too_many_requests"
+      retryAfter <- H.lookup "retry_after" error
+      retryAfter <- fromNumber retryAfter
+      retryAfter <- toBoundedInteger retryAfter
+      return retryAfter
     fromObject :: Value -> Maybe Object
     fromObject (Object obj) = Just obj
     fromObject _ = Nothing
@@ -179,17 +174,17 @@ dbxCall host argLoc resLoc mgr path arg input =
 
 apiCall :: (ToJSON arg, FromJSON result)
         => Manager -> BS.ByteString -> arg -> IO result
-apiCall conn path arg =
-  do (result, _) <-
-       dbxCall "api.dropboxapi.com" ArgBody ResBody conn path arg BL.empty
-     return result
+apiCall conn path arg = do
+  (result, _) <-
+    dbxCall "api.dropboxapi.com" ArgBody ResBody conn path arg BL.empty
+  return result
 
 sendContent :: (ToJSON arg, FromJSON result)
             => Manager -> BS.ByteString -> arg -> BL.ByteString -> IO result
-sendContent conn path arg input =
-  do (result, _) <-
-       dbxCall "content.dropboxapi.com" ArgHeader ResBody conn path arg input
-     return result
+sendContent conn path arg input = do
+  (result, _) <-
+    dbxCall "content.dropboxapi.com" ArgHeader ResBody conn path arg input
+  return result
 
 recvContent :: (ToJSON arg, FromJSON result)
             => Manager -> BS.ByteString -> arg -> IO (result, BL.ByteString)

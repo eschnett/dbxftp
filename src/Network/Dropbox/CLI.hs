@@ -1,16 +1,21 @@
 module Network.Dropbox.CLI (main) where
 
-import Control.Monad.Extra
-import Data.List
+import Control.Monad.IO.Class
+import qualified Data.ByteString as BS
+import Data.Conduit
+import Data.Conduit.Combinators
+import Data.List hiding (concat, concatMap, map)
 import Data.Maybe
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
+import qualified Data.Vector as V
 import Network.Dropbox.API hiding (mode)
-import qualified Network.Dropbox.API as Dbx
+import Prelude hiding (concat, concatMap, map, mapM, mapM_, unlines)
 import System.Console.CmdArgs.Explicit
 import System.Console.CmdArgs.Verbosity
 
-import qualified DBXFTP
+-- import qualified DBXFTP
 
 data Args = Args Verbosity Cmd
   deriving (Eq, Ord, Read, Show)
@@ -72,11 +77,11 @@ args = modes "dbxftp" (Args Normal NoCmd) "Access DropBox from the command line"
         makeVerbose verb (Args _ cmd) = Args verb cmd
 
 main :: IO ()
-main =
-  do putStrLn "DBXFTP: Access DropBox via the command line"
-     Args verbose cmd <- processArgs args
-     runCmd cmd
-     putStrLn "Done."
+main = do
+  putStrLn "DBXFTP: Access DropBox via the command line"
+  Args verbose cmd <- processArgs args
+  runCmd cmd
+  putStrLn "Done."
 
 --------------------------------------------------------------------------------
 
@@ -86,56 +91,60 @@ runCmd NoCmd =
 
 --------------------------------------------------------------------------------
 
-runCmd (Ls long recursive fps) = mapM_ ls fps
+runCmd (Ls long recursive fps) = do
+  mgr <- liftIO newManager
+  runConduit $ yieldMany fps .| ls mgr .| map encode .| stdout
   where
-    ls :: Path -> IO ()
-    ls fp =
-      do mgr <- newManager
-         let arg = GetMetadataArg fp
-         md <- getMetadata mgr arg
-         let format = if long == LsShort then prettyName else prettyInfo
-         case md of
-           FolderMetadata _ _ _ _
-             -> do let arg = ListFolderArg fp (recursive == LsRecursive)
-                   mds <- listFolder mgr arg
-                   mapM_ (T.putStrLn . format) mds
-           _ -> T.putStrLn (format md)
-    prettyName :: Metadata -> T.Text
-    prettyName NoMetadata = "<not found>"
-    prettyName md = fromMaybe (name md) (pathDisplay md)
-    prettyInfo :: Metadata -> T.Text
-    prettyInfo md@(FileMetadata _ _ _ _ _ _ _) =
+    ls :: Manager -> ConduitT Path T.Text IO ()
+    ls mgr = awaitForever \fp -> do
+      let arg = GetMetadataArg fp
+      md <- liftIO $ getMetadata mgr arg
+      case md of
+        FolderMetadata {} ->
+          let arg = ListFolderArg fp (recursive == LsRecursive)
+          in map (const ()) .| listFolder mgr arg .| map format
+        _ -> yield $ format md
+    encode :: T.Text -> BS.ByteString
+    encode t = T.encodeUtf8 (T.append t "\n")
+    format :: Metadata -> T.Text
+    format = case long of
+      LsShort -> formatName
+      LsLong -> formatInfo
+    formatName :: Metadata -> T.Text
+    formatName NoMetadata = "<not found>"
+    formatName md = fromMaybe (name md) (pathDisplay md)
+    formatInfo :: Metadata -> T.Text
+    formatInfo md@(FileMetadata {}) =
       T.intercalate " " [ typeString md
                         , T.pack $ show $ size md
-                        , prettyName md
+                        , formatName md
                         , symlinkTarget md]
-    prettyInfo md =
+    formatInfo md =
       T.intercalate " " [ typeString md
                         , "-"
-                        , prettyName md
+                        , formatName md
                         ]
     typeString :: Metadata -> T.Text
-    typeString md@(FileMetadata _ _ _ _ _ _ _) =
+    typeString md@(FileMetadata {}) =
       case symlinkInfo md of
-        Nothing -> " "
+        Nothing -> "-"
         Just _ -> "s"
-    typeString (FolderMetadata _ _ _ _) = "d"
-    typeString (DeletedMetadata _ _ _) = "D"
+    typeString (FolderMetadata {}) = "d"
+    typeString (DeletedMetadata {}) = "D"
     typeString NoMetadata = "?"
     symlinkTarget :: Metadata -> T.Text
-    symlinkTarget md@(FileMetadata _ _ _ _ _ _ _) =
+    symlinkTarget md@(FileMetadata {}) =
       case symlinkInfo md of
         Nothing -> ""
-        Just sym -> T.intercalate " " ["->", target sym]
+        Just sym -> T.append "-> " (target sym)
     symlinkTarget _ = ""
 
 --------------------------------------------------------------------------------
 
-runCmd (Put fps) =
-  if length fps < 2
-  then putStrLn "Need at least 2 arguments"
-  else do let dst = last fps
-              fps' = init fps
-          appState <- DBXFTP.newAppState
-          -- DBXFTP.put appState fps' dst
-          return ()
+-- runCmd (Put fps) =
+--   if length fps < 2
+--   then putStrLn "Need at least 2 arguments"
+--   else do let dst = last fps
+--               fps' = init fps
+--           appState <- DBXFTP.newAppState
+--           DBXFTP.put appState fps' dst

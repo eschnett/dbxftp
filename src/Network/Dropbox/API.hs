@@ -17,14 +17,18 @@ module Network.Dropbox.API
   -- , uploadFiles
   ) where
 
-import Control.Exception
 import Control.Monad
-import Control.Monad.Loops
+import Control.Monad.IO.Class
 import Data.Aeson
-import Data.Foldable
+import Data.Conduit
+import Data.Conduit.Combinators (concat)
+import Data.Conduit.List (unfoldM)
+import qualified Data.Foldable as F
 import Data.Int
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import Network.Dropbox.API.Basic
+import Prelude hiding (concat)
 
 --------------------------------------------------------------------------------
 
@@ -53,28 +57,28 @@ data Metadata = FileMetadata { name :: Path
 instance FromJSON Metadata where
   parseJSON = withObject "Metadata"
     \v -> do tag <- v .: ".tag"
-             asum [ guard (tag == String "file")
-                    >> FileMetadata
-                    <$> v .: "name"
-                    <*> v .: "id"
-                    <*> v .: "size"
-                    <*> v .:? "path_lower"
-                    <*> v .:? "path_display"
-                    <*> v .:? "symlink_info"
-                    <*> v .: "content_hash"
-                  , guard (tag == String "folder")
-                    >> FolderMetadata
-                    <$> v .: "name"
-                    <*> v .: "id"
-                    <*> v .:? "path_lower"
-                    <*> v .:? "path_display"
-                  , guard (tag == String "deleted")
-                    >> DeletedMetadata
-                    <$> v .: "name"
-                    <*> v .:? "path_lower"
-                    <*> v .:? "path_display"
-                  , return NoMetadata
-                  ]
+             F.asum [ guard (tag == String "file")
+                      >> FileMetadata
+                      <$> v .: "name"
+                      <*> v .: "id"
+                      <*> v .: "size"
+                      <*> v .:? "path_lower"
+                      <*> v .:? "path_display"
+                      <*> v .:? "symlink_info"
+                      <*> v .: "content_hash"
+                    , guard (tag == String "folder")
+                      >> FolderMetadata
+                      <$> v .: "name"
+                      <*> v .: "id"
+                      <*> v .:? "path_lower"
+                      <*> v .:? "path_display"
+                    , guard (tag == String "deleted")
+                      >> DeletedMetadata
+                      <$> v .: "name"
+                      <*> v .:? "path_lower"
+                      <*> v .:? "path_display"
+                    , return NoMetadata
+                    ]
 
 newtype SymlinkInfo = SymlinkInfo { target :: Path }
   deriving (Eq, Ord, Read, Show)
@@ -114,7 +118,7 @@ instance ToJSON ListFolderArg where
 listFolderArg :: ListFolderArg 
 listFolderArg = ListFolderArg { path = "", recursive = False }
 
-data ListFolderResult = ListFolderResult { entries :: [Metadata]
+data ListFolderResult = ListFolderResult { entries :: V.Vector Metadata
                                          , cursor :: T.Text
                                          , hasMore :: Bool
                                          }
@@ -127,22 +131,24 @@ instance FromJSON ListFolderResult where
     <*> v .: "cursor"
     <*> v .: "has_more"
 
-listFolder :: Manager -> ListFolderArg -> IO [Metadata]
-listFolder mgr arg =
-  do (mds, state) <- listInit
-     mdss <- unfoldrM listNext state
-     evaluate $ concat $ mds : mdss
+listFolder :: Manager -> ListFolderArg -> ConduitT () Metadata IO ()
+listFolder mgr arg = listChunks .| concat
   where
-    listInit :: IO ([Metadata], (T.Text, Bool))
-    listInit =
-      do result <- apiCall mgr "/2/files/list_folder" arg
-         return (entries result, (cursor result, hasMore result))
-    listNext :: (T.Text, Bool) -> IO (Maybe ([Metadata], (T.Text, Bool)))
+    listChunks :: ConduitT () (V.Vector Metadata) IO ()
+    listChunks = do
+      (mds, state) <- liftIO listInit
+      yield mds
+      unfoldM listNext state
+    listInit :: IO (V.Vector Metadata, (T.Text, Bool))
+    listInit = do
+      result <- apiCall mgr "/2/files/list_folder" arg
+      return (entries result, (cursor result, hasMore result))
+    listNext :: (T.Text, Bool) -> IO (Maybe (V.Vector Metadata, (T.Text, Bool)))
     listNext (_, False) = return Nothing
-    listNext (prevCursor, True) =
-      do let nextArg = object [ "cursor" .= prevCursor ]
-         result <- apiCall mgr "/2/files/list_folder/continue" nextArg
-         return $ Just (entries result, (cursor result, hasMore result))
+    listNext (prevCursor, True) = do
+      let nextArg = object [ "cursor" .= prevCursor ]
+      result <- apiCall mgr "/2/files/list_folder/continue" nextArg
+      return $ Just (entries result, (cursor result, hasMore result))
 
 --------------------------------------------------------------------------------
 
