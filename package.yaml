@@ -165,7 +165,6 @@ library:
     - base
     - bytestring
     - cmdargs
-    - conduit
     - extra
     - filepath
     - http-client

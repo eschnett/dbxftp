@@ -20,15 +20,14 @@ module Network.Dropbox.API
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson
-import Data.Conduit
-import Data.Conduit.Combinators (concat)
-import Data.Conduit.List (unfoldM)
 import qualified Data.Foldable as F
 import Data.Int
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Network.Dropbox.API.Basic
 import Prelude hiding (concat)
+import Streamly
+import qualified Streamly.Prelude as S
 
 --------------------------------------------------------------------------------
 
@@ -131,14 +130,13 @@ instance FromJSON ListFolderResult where
     <*> v .: "cursor"
     <*> v .: "has_more"
 
-listFolder :: Manager -> ListFolderArg -> ConduitT () Metadata IO ()
-listFolder mgr arg = listChunks .| concat
+listFolder :: Manager -> ListFolderArg -> Serial Metadata
+listFolder mgr arg = S.concatMap S.fromFoldable listChunks
   where
-    listChunks :: ConduitT () (V.Vector Metadata) IO ()
+    listChunks :: Serial (V.Vector Metadata)
     listChunks = do
       (mds, state) <- liftIO listInit
-      yield mds
-      unfoldM listNext state
+      S.yield mds <> S.unfoldrM listNext state
     listInit :: IO (V.Vector Metadata, (T.Text, Bool))
     listInit = do
       result <- apiCall mgr "/2/files/list_folder" arg

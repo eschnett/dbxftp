@@ -1,17 +1,15 @@
 module Network.Dropbox.CLI (main) where
 
 import Control.Monad.IO.Class
-import qualified Data.ByteString as BS
-import Data.Conduit
-import Data.Conduit.Combinators
-import Data.List hiding (concat, concatMap, map)
+import Data.Function ((&))
+import Data.List
 import Data.Maybe
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
-import qualified Data.Vector as V
 import Network.Dropbox.API hiding (mode)
-import Prelude hiding (concat, concatMap, map, mapM, mapM_, unlines)
+import Prelude
+import Streamly
+import qualified Streamly.Prelude as S
 import System.Console.CmdArgs.Explicit
 import System.Console.CmdArgs.Verbosity
 
@@ -93,19 +91,17 @@ runCmd NoCmd =
 
 runCmd (Ls long recursive fps) = do
   mgr <- liftIO newManager
-  runConduit $ yieldMany fps .| ls mgr .| map encode .| stdout
+  S.drain $ S.mapM T.putStrLn $ aheadly $ ls mgr $ S.fromList fps
   where
-    ls :: Manager -> ConduitT Path T.Text IO ()
-    ls mgr = awaitForever \fp -> do
+    ls :: Manager -> Ahead Path -> Ahead T.Text
+    ls mgr = (=<<) \fp -> do
       let arg = GetMetadataArg fp
       md <- liftIO $ getMetadata mgr arg
       case md of
         FolderMetadata {} ->
           let arg = ListFolderArg fp (recursive == LsRecursive)
-          in map (const ()) .| listFolder mgr arg .| map format
-        _ -> yield $ format md
-    encode :: T.Text -> BS.ByteString
-    encode t = T.encodeUtf8 (T.append t "\n")
+          in format <$> serially (listFolder mgr arg)
+        _ -> S.yield $ format md
     format :: Metadata -> T.Text
     format = case long of
       LsShort -> formatName
@@ -114,7 +110,7 @@ runCmd (Ls long recursive fps) = do
     formatName NoMetadata = "<not found>"
     formatName md = fromMaybe (name md) (pathDisplay md)
     formatInfo :: Metadata -> T.Text
-    formatInfo md@(FileMetadata {}) =
+    formatInfo md@FileMetadata {} =
       T.intercalate " " [ typeString md
                         , T.pack $ show $ size md
                         , formatName md
@@ -125,15 +121,15 @@ runCmd (Ls long recursive fps) = do
                         , formatName md
                         ]
     typeString :: Metadata -> T.Text
-    typeString md@(FileMetadata {}) =
+    typeString md@FileMetadata {} =
       case symlinkInfo md of
         Nothing -> "-"
         Just _ -> "s"
-    typeString (FolderMetadata {}) = "d"
-    typeString (DeletedMetadata {}) = "D"
+    typeString FolderMetadata {} = "d"
+    typeString DeletedMetadata {} = "D"
     typeString NoMetadata = "?"
     symlinkTarget :: Metadata -> T.Text
-    symlinkTarget md@(FileMetadata {}) =
+    symlinkTarget md@FileMetadata {} =
       case symlinkInfo md of
         Nothing -> ""
         Just sym -> T.append "-> " (target sym)
