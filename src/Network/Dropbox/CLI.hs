@@ -100,10 +100,10 @@ runCmd (Put fps)
 ls :: LsLong -> LsRecursive -> [Path] -> IO ()
 ls long recursive fps = do
   mgr <- liftIO newManager
-  S.drain $ aheadly
-    $ S.mapM T.putStrLn
-    |$ S.concatMap (ls1 mgr)
-    |$ S.fromList fps
+  (S.mapM_ T.putStrLn :: Serial T.Text -> IO ())
+    $ (aheadly :: Ahead T.Text -> Serial T.Text)
+    $ (S.concatMap (ls1 mgr) :: Ahead Path -> Ahead T.Text)
+    |$ (S.fromList fps :: Ahead Path)
   where
     ls1 :: Manager -> Path -> Ahead T.Text
     ls1 mgr fp = do
@@ -212,17 +212,18 @@ put fps dst = do
                    -> (FilePath, FileStatus, Path) -> IO Bool
     needUploadFile fmgr mgr dstmap (fp, fs, p) = do
       case H.lookup p dstmap of
-        Nothing -> do -- putStrLn $ "[" ++ show p ++ ": remote does not exist]"
+        Nothing -> do putStrLn $ ("Uploading " ++ show p
+                                  ++ " (remote does not exist)")
                       return True
         Just md ->
           if size md /= fromIntegral (fileSize fs)
-          then do -- putStrLn $ "[" ++ show p ++ ": remote size differs]"
+          then do putStrLn $ "Uploading " ++ show p ++ " (remote size differs)"
                   return True
           else do ContentHash hash <- fileContentHash fmgr fp
                   let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
-                  -- if hashDiffers
-                  --   then putStrLn $ "[" ++ show p ++ ": hash differs]"
-                  --   else putStrLn $ "[" ++ show p ++ ": skip upload]"
+                  if hashDiffers
+                    then putStrLn $ "Uploading " ++ show p ++ " (hash differs)"
+                    else putStrLn $ "Skipping " ++ show p
                   return hashDiffers
     makeUploadFileArg :: (FilePath, FileStatus, Path) -> UploadFileArg
     makeUploadFileArg (fp, fs, p) = let mode = Overwrite

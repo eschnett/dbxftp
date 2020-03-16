@@ -156,10 +156,11 @@ contentHash content =
     chunkSize = 4 * 1024 * 1024 -- 4 MByte
 
 fileContentHash :: FileManager -> FilePath -> IO ContentHash
-fileContentHash fmgr fp = do waitOpenFile fmgr
-                             content <- BL.readFile fp
+fileContentHash fmgr fp = bracket_
+                          (waitOpenFile fmgr)
+                          (signalOpenFile fmgr)
+                          do content <- BL.readFile fp
                              hash <- evaluate $ contentHash content
-                             signalOpenFile fmgr
                              return hash
 
 -- might not be needed

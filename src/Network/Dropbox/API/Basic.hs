@@ -1,6 +1,8 @@
 module Network.Dropbox.API.Basic
   ( Manager
   , newManager
+  , waitUploadFinish
+  , signalUploadFinish
   , DbxException(..)
   , apiCall
   , sendContent
@@ -34,9 +36,13 @@ import System.Posix
 maxOpenConnections :: Int
 maxOpenConnections = 100
 
+maxUploadFinishes :: Int
+maxUploadFinishes = 1
+
 data Manager = Manager { accessToken :: BS.ByteString
                        , manager :: NC.Manager
                        , theOpenConnections :: QSem
+                       , theUploadFinishes :: QSem
                        , theAvailableConnection :: MVar ()
                        }
 
@@ -45,6 +51,7 @@ newManager = Manager
              <$> getAccessToken
              <*> NC.newManager tlsManagerSettings
              <*> newQSem maxOpenConnections
+             <*> newQSem maxUploadFinishes
              <*> newMVar ()
 
 -- no Read/Show instances to prevent accidental disclosure of token
@@ -68,6 +75,12 @@ waitOpenConnection mgr = do waitQSem (theOpenConnections mgr)
 
 signalOpenConnection :: Manager -> IO ()
 signalOpenConnection mgr = signalQSem (theOpenConnections mgr)
+
+waitUploadFinish :: Manager -> IO ()
+waitUploadFinish mgr = waitQSem (theUploadFinishes mgr)
+
+signalUploadFinish :: Manager -> IO ()
+signalUploadFinish mgr = signalQSem (theUploadFinishes mgr)
 
 delayConnection :: Manager -> Int64 -> IO ()
 delayConnection mgr delay =

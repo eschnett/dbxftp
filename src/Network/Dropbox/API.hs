@@ -264,26 +264,26 @@ uploadFiles :: FileManager -> Manager
             -> Async UploadFileArg -> Async UploadFileResult
 uploadFiles fmgr mgr args = do
   S.concatMap S.fromList
-    $ serially
-    $ S.mapM uploadFinish
-    $ asyncly
-    $ S.chunksOf finishBatchSize toList
-    $ S.mapM uploadFile
-    $ args
+    |$ S.mapM uploadFinish
+    |$ S.chunksOf finishBatchSize toList
+    |$ S.mapM uploadFile
+    |$ args
   where
     requestSize = 150000000 :: Int64 -- 150 MByte
     finishBatchSize = 1000 :: Int
     uploadFile :: UploadFileArg -> IO (UploadFileArg, UploadCursor)
-    uploadFile arg = do
-      waitOpenFile fmgr
-      file <- BL.readFile (localPath arg)
-      let uploadState0 = UploadState file 0 0
-      (sessionId, uploadState1) <- uploadStart uploadState0
-      uploadState2 <-
-        iterateUntilM uploadStateDone (uploadAppend sessionId) uploadState1
-      signalOpenFile fmgr
-      let cursor = UploadCursor sessionId (offset (uploadState2 :: UploadState))
-      return (arg, cursor)
+    uploadFile arg =
+      bracket_
+      (waitOpenFile fmgr)
+      (signalOpenFile fmgr)
+      do file <- BL.readFile (localPath arg)
+         let uploadState0 = UploadState file 0 0
+         (sessionId, uploadState1) <- uploadStart uploadState0
+         uploadState2 <-
+           iterateUntilM uploadStateDone (uploadAppend sessionId) uploadState1
+         let cursor =
+               UploadCursor sessionId (offset (uploadState2 :: UploadState))
+         return (arg, cursor)
     uploadStart :: UploadState -> IO (T.Text, UploadState)
     uploadStart uploadState = do
       let (headUploadState, tailUploadState) =
@@ -313,7 +313,12 @@ uploadFiles fmgr mgr args = do
                                       | (fileArg, cursor) <- uploads
                                       ]
                        ]
-      result <- apiCall mgr "/2/files/upload_session/finish_batch" arg
+      result <- bracket_
+                (do waitUploadFinish mgr
+                    putStrLn "[uploading...]")
+                (do putStrLn "[done uploading]"
+                    signalUploadFinish mgr)
+                $ apiCall mgr "/2/files/upload_session/finish_batch" arg
       case result of
         Complete entries -> return entries
         AsyncJobId asyncJobId -> untilJust do
