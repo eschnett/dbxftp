@@ -1,6 +1,7 @@
 module Network.Dropbox.API.Basic
   ( Manager
   , newManager
+  , DbxException(..)
   , apiCall
   , sendContent
   , recvContent
@@ -20,6 +21,7 @@ import Data.Scientific
 import qualified Data.Text.Encoding as T
 import Data.Time.Clock.POSIX
 import Data.Time.Clock.System
+import Data.Typeable
 import Network.HTTP.Client hiding (Manager, newManager)
 import qualified Network.HTTP.Client as NC
 import Network.HTTP.Client.TLS
@@ -85,6 +87,13 @@ data ArgLoc = ArgHeader | ArgBody
 data ResLoc = ResHeader | ResBody
   deriving (Enum, Eq, Ord, Read, Show)
 
+data DbxException = DbxStatusCodeException Request Int BL.ByteString
+                  | DbxJSONException Request BL.ByteString String
+                  | DbxNotFoundException Request
+  deriving (Show, Typeable)
+
+instance Exception DbxException
+
 dbxCall :: (ToJSON arg, FromJSON result)
         => BS.ByteString -> ArgLoc -> ResLoc
         -> Manager -> BS.ByteString -> arg
@@ -107,8 +116,9 @@ dbxCall host argLoc resLoc mgr path arg input = do
                else body
   result <- case eitherDecode result of
     Left err -> do putStrLn "JSON parse error"
+                   putStrLn $ show result
                    putStrLn $ show err
-                   throw $ AssertionFailed err
+                   throw $ DbxJSONException request body err
     Right result -> return result
   let output = if resLoc == ResHeader then body else BL.empty
   return (result, output)
@@ -120,7 +130,14 @@ dbxCall host argLoc resLoc mgr path arg input = do
         $ httpLBS request
       let st = getResponseStatusCode response
       let body = getResponseBody response
-      if | st == 429 -> do
+      if | st == 409 -> do
+             let ex = decodeDbxException request st body
+             case ex of
+               DbxNotFoundException{} -> return ()
+               _ -> putStrLn
+                    $ "Received status code " ++ show st ++ ", aborting"
+             throw ex
+         | st == 429 -> do
              putStrLn "Exceeded rate limit"
              flagRateLimit body
              return Nothing
@@ -129,8 +146,7 @@ dbxCall host argLoc resLoc mgr path arg input = do
              return Nothing
          | st `div` 100 /= 2 -> do -- abort
              putStrLn $ "Received status code " ++ show st ++ ", aborting"
-             let ex = StatusCodeException (void response) (BL.toStrict body)
-             throw $ HttpExceptionRequest request ex
+             throw $ DbxStatusCodeException request st body
          | True -> return $ Just response
     basicRequest :: Request
     basicRequest =
@@ -143,6 +159,25 @@ dbxCall host argLoc resLoc mgr path arg input = do
       & setRequestPath path
       & addRequestHeader "Authorization" (BS.append "Bearer " (accessToken mgr))
       & setRequestIgnoreStatus
+    decodeDbxException :: Request -> Int -> BL.ByteString -> DbxException
+    decodeDbxException request st body = do
+      let notFound = handleNotFound body
+      case notFound of
+        Nothing -> DbxStatusCodeException request st body
+        Just () -> DbxNotFoundException request
+    handleNotFound :: BL.ByteString -> Maybe ()
+    handleNotFound body =
+      do obj <- decode body
+         obj <- fromObject obj
+         err <- H.lookup "error" obj
+         err <- fromObject err
+         tag <- H.lookup ".tag" err
+         guard $ tag == String "path"
+         path <- H.lookup "path" err
+         path <- fromObject path
+         tag <- H.lookup ".tag" path
+         guard $ tag == String "not_found"
+         return ()
     flagRateLimit :: BL.ByteString -> IO ()
     flagRateLimit body = do
       let delay = case decodeRateLimit body of
@@ -174,19 +209,19 @@ dbxCall host argLoc resLoc mgr path arg input = do
 
 apiCall :: (ToJSON arg, FromJSON result)
         => Manager -> BS.ByteString -> arg -> IO result
-apiCall conn path arg = do
+apiCall mgr path arg = do
   (result, _) <-
-    dbxCall "api.dropboxapi.com" ArgBody ResBody conn path arg BL.empty
+    dbxCall "api.dropboxapi.com" ArgBody ResBody mgr path arg BL.empty
   return result
 
 sendContent :: (ToJSON arg, FromJSON result)
             => Manager -> BS.ByteString -> arg -> BL.ByteString -> IO result
-sendContent conn path arg input = do
+sendContent mgr path arg input = do
   (result, _) <-
-    dbxCall "content.dropboxapi.com" ArgHeader ResBody conn path arg input
+    dbxCall "content.dropboxapi.com" ArgHeader ResBody mgr path arg input
   return result
 
 recvContent :: (ToJSON arg, FromJSON result)
             => Manager -> BS.ByteString -> arg -> IO (result, BL.ByteString)
-recvContent conn path arg =
-  dbxCall "content.dropboxapi.com" ArgHeader ResHeader conn path arg BL.empty
+recvContent mgr path arg =
+  dbxCall "content.dropboxapi.com" ArgHeader ResHeader mgr path arg BL.empty
