@@ -210,21 +210,25 @@ put fps dst = do
     makePair md = (fromMaybe (name md) (pathDisplay md), md)
     needUploadFile :: FileManager -> Manager -> H.HashMap Path Metadata
                    -> (FilePath, FileStatus, Path) -> IO Bool
-    needUploadFile fmgr mgr dstmap (fp, fs, p) = do
-      case H.lookup p dstmap of
-        Nothing -> do putStrLn $ ("Uploading " ++ show p
-                                  ++ " (remote does not exist)")
-                      return True
-        Just md ->
-          if size md /= fromIntegral (fileSize fs)
-          then do putStrLn $ "Uploading " ++ show p ++ " (remote size differs)"
-                  return True
-          else do ContentHash hash <- fileContentHash fmgr fp
-                  let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
-                  if hashDiffers
-                    then putStrLn $ "Uploading " ++ show p ++ " (hash differs)"
-                    else putStrLn $ "Skipping " ++ show p
-                  return hashDiffers
+    needUploadFile fmgr mgr dstmap (fp, fs, p) =
+      if not (isRegularFile fs)
+      then return False
+      else case H.lookup p dstmap of
+             Nothing -> do putStrLn $ ("Uploading " ++ show p
+                                       ++ " (remote does not exist)")
+                           return True
+             Just md ->
+               if size md /= fromIntegral (fileSize fs)
+               then do putStrLn $ ("Uploading " ++ show p
+                                   ++ " (remote size differs)")
+                       return True
+               else do ContentHash hash <- fileContentHash fmgr fp
+                       let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
+                       if hashDiffers
+                         then putStrLn $ ("Uploading " ++ show p
+                                          ++ " (hash differs)")
+                         else putStrLn $ "Skipping " ++ show p
+                       return hashDiffers
     makeUploadFileArg :: (FilePath, FileStatus, Path) -> UploadFileArg
     makeUploadFileArg (fp, fs, p) = let mode = Overwrite
                                         autorename = False
