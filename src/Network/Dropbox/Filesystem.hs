@@ -79,7 +79,7 @@ instance Show FileStatus where show = showFileStatus
 fileStatus :: FileManager -> FilePath -> IO FileStatus
 fileStatus fmgr fp =
   -- bracket_ (waitOpenFile fmgr) (signalOpenFile fmgr) $ getFileStatus fp
-  getFileStatus fp
+  getSymbolicLinkStatus fp
 
 --------------------------------------------------------------------------------
 
