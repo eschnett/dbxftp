@@ -34,7 +34,7 @@ import System.Posix
 --------------------------------------------------------------------------------
 
 maxOpenConnections :: Int
-maxOpenConnections = 100
+maxOpenConnections = 10
 
 maxUploadFinishes :: Int
 maxUploadFinishes = 1
