@@ -306,27 +306,30 @@ uploadFiles fmgr mgr args = do
                     (content headUploadState)
       return tailUploadState
     uploadFinish :: [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
-    uploadFinish uploads = do
-      let arg = object [ "entries" .= [ object [ "cursor" .= cursor
-                                               , "commit" .= fileArg
-                                               ]
-                                      | (fileArg, cursor) <- uploads
-                                      ]
-                       ]
-      result <- bracket_
-                (do waitUploadFinish mgr
-                    putStrLn "[uploading...]")
-                (do putStrLn "[done uploading]"
-                    signalUploadFinish mgr)
-                $ apiCall mgr "/2/files/upload_session/finish_batch" arg
-      case result of
-        Complete entries -> return entries
-        AsyncJobId asyncJobId -> untilJust do
-          let arg' = object [ "async_job_id" .= asyncJobId ]
-          result' <-
-            apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
-          case result' of
-            Complete entries -> return $ Just entries
-            InProgress -> return Nothing
-            AsyncJobId{} -> undefined
-        InProgress -> undefined
+    uploadFinish uploads
+      | null uploads = return []
+      | otherwise = do
+          assert (length uploads > 0) $ return ()
+          let arg = object [ "entries" .= [ object [ "cursor" .= cursor
+                                                   , "commit" .= fileArg
+                                                   ]
+                                          | (fileArg, cursor) <- uploads
+                                          ]
+                           ]
+          result <- bracket_
+                    (do waitUploadFinish mgr
+                        putStrLn "[uploading...]")
+                    (do putStrLn "[done uploading]"
+                        signalUploadFinish mgr)
+                    $ apiCall mgr "/2/files/upload_session/finish_batch" arg
+          case result of
+            Complete entries -> return entries
+            AsyncJobId asyncJobId -> untilJust do
+              let arg' = object [ "async_job_id" .= asyncJobId ]
+              result' <-
+                apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
+              case result' of
+                Complete entries -> return $ Just entries
+                InProgress -> return Nothing
+                AsyncJobId{} -> undefined
+            InProgress -> undefined
