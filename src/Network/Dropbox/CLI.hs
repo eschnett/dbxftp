@@ -191,7 +191,7 @@ put fps dst = do
   counters <- newCounters
   fmgr <- liftIO newFileManager
   mgr <- newManager
-  dstlist <- S.toList $ listFolder mgr (ListFolderArg dst True)
+  dstlist <- S.toList $ listFolder1 mgr (ListFolderArg dst True)
   let dstmap = H.fromList $ fmap makePair dstlist
   S.drain
     $ asyncly
@@ -204,6 +204,11 @@ put fps dst = do
     |$ listDirsRec fmgr dst
     |$ S.fromList fps
   where
+    listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
+    listFolder1 mgr arg =
+      S.handle (\case DbxNotFoundException {} -> S.nil
+                      ex -> liftIO $ throw ex)
+      $ listFolder mgr arg
     listDirsRec :: FileManager
                 -> Path
                 -> Async FilePath
