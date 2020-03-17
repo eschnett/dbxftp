@@ -3,6 +3,7 @@ module Network.Dropbox.CLI (main) where
 import Control.Exception
 import Control.Monad.IO.Class
 import qualified Data.HashMap.Strict as H
+import Data.IORef
 import Data.List
 import Data.Maybe
 import qualified Data.Text as T
@@ -155,32 +156,53 @@ ls long recursive fps = do
 
 --------------------------------------------------------------------------------
 
+data Counters = Counters { found :: !Int
+                         , needUpload :: !Int
+                         , uploaded :: !Int
+                         }
+  deriving (Eq, Ord, Read, Show)
+
+showCounters :: Counters -> String
+showCounters (Counters found needUpload uploaded) =
+  let skipped = found - needUpload
+  in "(" ++ show (uploaded + skipped) ++ "/" ++ show found ++ ")"
+
+newCounters :: IO (IORef Counters)
+newCounters = newIORef (Counters 0 0 0)
+
+-- These want to be a lens
+countFound :: IORef Counters -> IO ()
+countFound counters =
+  atomicModifyIORef' counters
+  \counter -> (counter { found = found counter + 1}, ())
+
+countNeedUpload :: IORef Counters -> IO ()
+countNeedUpload counters =
+  atomicModifyIORef' counters
+  \counter -> (counter { needUpload = needUpload counter + 1}, ())
+
+countUploaded :: IORef Counters -> IO ()
+countUploaded counters =
+  atomicModifyIORef' counters
+  \counter -> (counter { uploaded = uploaded counter + 1}, ())
+
 put :: [FilePath] -> Path -> IO ()
 put fps dst = do
-  let srcs = S.fromList fps :: Async FilePath
-  fmgr <- liftIO newFileManager :: IO FileManager
-  let srcdsts = listDirsRec fmgr dst |$ srcs
-        :: Async (FilePath, FileStatus, Path)
-  -- liftIO $ putStrLn "Locals:"
-  -- S.drain $ asyncly $ S.mapM print |$ srcdsts
+  counters <- newCounters
+  fmgr <- liftIO newFileManager
   mgr <- newManager
-  let dsts = listFolder mgr (ListFolderArg dst True) :: Serial Metadata
-  -- liftIO $ putStrLn "Remotes:"
-  -- S.drain $ S.mapM print |$ dsts
-  dsts' <- S.toList $ S.map makePair |$ dsts :: IO [(Path, Metadata)]
-  let dstmap = H.fromList dsts' :: H.HashMap Path Metadata
-  -- liftIO $ putStrLn "Remotes:"
-  -- liftIO $ print dstmap
-  let uploads = S.filterM (needUploadFile fmgr mgr dstmap)
-                |$ srcdsts
-  -- liftIO $ putStrLn "Uploads:"
-  -- S.drain $ asyncly $ S.mapM print |$ uploads
-  let ress = uploadFiles fmgr mgr
-             |$ S.map makeUploadFileArg
-             |$ uploads
-  -- liftIO $ putStrLn "Results:"
-  -- S.drain $ asyncly $ S.mapM print |$ ress
-  S.drain $ asyncly ress
+  dstlist <- S.toList $ listFolder mgr (ListFolderArg dst True)
+  let dstmap = H.fromList $ fmap makePair dstlist
+  S.drain
+    $ asyncly
+    $ S.trace (\_ -> countUploaded counters)
+    |$ uploadFiles fmgr mgr
+    |$ S.map makeUploadFileArg
+    |$ S.trace (\_ -> countNeedUpload counters)
+    |$ S.filterM (needUploadFile fmgr mgr counters dstmap)
+    |$ S.trace (\_ -> countFound counters)
+    |$ listDirsRec fmgr dst
+    |$ S.fromList fps
   where
     listDirsRec :: FileManager
                 -> Path
@@ -208,27 +230,36 @@ put fps dst = do
     makePair :: Metadata -> (Path, Metadata)
     makePair NoMetadata = ("<not found>", NoMetadata)
     makePair md = (fromMaybe (name md) (pathDisplay md), md)
-    needUploadFile :: FileManager -> Manager -> H.HashMap Path Metadata
+    needUploadFile :: FileManager -> Manager -> IORef Counters
+                   -> H.HashMap Path Metadata
                    -> (FilePath, FileStatus, Path) -> IO Bool
-    needUploadFile fmgr mgr dstmap (fp, fs, p) =
+    needUploadFile fmgr mgr counters dstmap (fp, fs, p) =
       if not (isRegularFile fs)
       then return False
-      else case H.lookup p dstmap of
-             Nothing -> do putStrLn $ ("Uploading " ++ show p
-                                       ++ " (remote does not exist)")
-                           return True
-             Just md ->
-               if size md /= fromIntegral (fileSize fs)
-               then do putStrLn $ ("Uploading " ++ show p
-                                   ++ " (remote size differs)")
-                       return True
-               else do ContentHash hash <- fileContentHash fmgr fp
-                       let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
-                       if hashDiffers
-                         then putStrLn $ ("Uploading " ++ show p
-                                          ++ " (hash differs)")
-                         else putStrLn $ "Skipping " ++ show p
-                       return hashDiffers
+      else do
+        case H.lookup p dstmap of
+          Nothing -> do
+            ctrs <- readIORef counters
+            putStrLn $ ("Uploading " ++ show p ++ " (remote does not exist) "
+                        ++ showCounters ctrs)
+            return True
+          Just md ->
+            if size md /= fromIntegral (fileSize fs)
+            then do
+              ctrs <- readIORef counters
+              putStrLn $ ("Uploading " ++ show p ++ " (remote size differs)"
+                          ++ showCounters ctrs)
+              return True
+            else do
+              ContentHash hash <- fileContentHash fmgr fp
+              let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
+              ctrs <- readIORef counters
+              if hashDiffers
+                then putStrLn $ ("Uploading " ++ show p ++ " (hash differs)"
+                                 ++ showCounters ctrs)
+                else putStrLn $ ("Skipping " ++ show p ++ " "
+                                 ++ showCounters ctrs)
+              return hashDiffers
     makeUploadFileArg :: (FilePath, FileStatus, Path) -> UploadFileArg
     makeUploadFileArg (fp, fs, p) = let mode = Overwrite
                                         autorename = False
