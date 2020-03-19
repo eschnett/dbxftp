@@ -1,3 +1,74 @@
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BinaryLiterals #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE EmptyCase #-}
+{-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE ExplicitNamespaces #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTSyntax #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE HexFloatLiterals #-}
+{-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE IncoherentInstances #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE NPlusKPatterns #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NamedWildCards #-}
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PackageImports #-}
+{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE StarIsType #-}
+{-# LANGUAGE StaticPointers #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE TypeInType #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
+{-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveLift #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE ParallelListComp #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE UnicodeSyntax #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE MonadComprehensions#-}
+
 module Network.Dropbox.CLI (main) where
 
 import Control.Exception
@@ -27,6 +98,7 @@ data Cmd = NoCmd
               , lsRecursive :: LsRecursive
               , lsFiles :: [String]
               }
+         | Mkdir { mkdirDirectories :: [String] }
          | Put { putFiles :: [String] }
          deriving (Eq, Ord, Read, Show)
 
@@ -64,6 +136,14 @@ argsLs = mode "ls" (Ls LsShort LsFinal []) "list directory entries"
         makeRecursive :: Cmd -> Cmd
         makeRecursive ls = ls { lsRecursive = LsRecursive }
 
+argsMkdir :: Mode Cmd
+argsMkdir = mode "mkdir" (Mkdir []) "create directories"
+            (flagArg addPath "path name")
+            []
+  where addPath :: Update Cmd
+        addPath fp mkdir =
+          Right $ mkdir { mkdirDirectories = mkdirDirectories mkdir ++ [fp] }
+
 argsPut :: Mode Cmd
 argsPut = mode "put" (Put []) "upload file or directory"
           (flagArg addPath "path name")
@@ -74,7 +154,7 @@ argsPut = mode "put" (Put []) "upload file or directory"
 args :: Mode Args
 args = modes "dbxftp" (Args Normal NoCmd)
        "An ftp-like command line interface to DropBox"
-       (remapArgs <$> [argsLs, argsPut])
+       (remapArgs <$> [argsLs, argsMkdir, argsPut])
        -- (flagsVerbosity makeVerbose)
   where makeVerbose :: Verbosity -> Args -> Args
         makeVerbose verb (Args _ cmd) = Args verb cmd
@@ -91,6 +171,7 @@ main = do
 runCmd :: Cmd -> IO ()
 runCmd NoCmd = putStrLn "No command given."
 runCmd (Ls long recursive fps) = ls long recursive $ fmap T.pack fps
+runCmd (Mkdir fps) = mkdir $ fmap T.pack fps
 runCmd (Put fps)
   | null fps = putStrLn "Need at least 1 argument"
   | otherwise = let (srcs, dst) = (init fps, T.pack $ last fps)
@@ -153,6 +234,17 @@ ls long recursive fps = do
         Nothing -> ""
         Just sym -> T.append "-> " (target sym)
     symlinkTarget _ = ""
+
+--------------------------------------------------------------------------------
+
+mkdir :: [Path] -> IO ()
+mkdir fps = do
+  mgr <- liftIO newManager
+  S.drain
+    $ asyncly
+    $ (createFolder mgr :: Async CreateFolderArg -> Async CreateFolderResult)
+    |$ (S.map CreateFolderArg :: Async Path -> Async CreateFolderArg)
+    |$ (S.fromList fps :: Async Path)
 
 --------------------------------------------------------------------------------
 

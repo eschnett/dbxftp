@@ -1,3 +1,74 @@
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BinaryLiterals #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE EmptyCase #-}
+{-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE ExplicitNamespaces #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTSyntax #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE HexFloatLiterals #-}
+{-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE IncoherentInstances #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE NPlusKPatterns #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NamedWildCards #-}
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PackageImports #-}
+{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE StarIsType #-}
+{-# LANGUAGE StaticPointers #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE TypeInType #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
+{-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveLift #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE ParallelListComp #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE UnicodeSyntax #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE MonadComprehensions#-}
+
 module Network.Dropbox.API.Basic
   ( Manager
   , newManager
@@ -138,29 +209,41 @@ dbxCall host argLoc resLoc mgr path arg input = do
   where
     checkedHttp :: Request -> IO (Maybe (Response BL.ByteString))
     checkedHttp request = do
-      response <-
-        bracket_ (waitOpenConnection mgr) (signalOpenConnection mgr)
+      mresponse <-
+        tryJust (\case
+                    HttpExceptionRequest _ ex ->
+                      case ex of
+                        ResponseTimeout -> Just ResponseTimeout
+                        _ -> Nothing
+                    _ -> Nothing)
+        $ bracket_ (waitOpenConnection mgr) (signalOpenConnection mgr)
         $ httpLBS request
-      let st = getResponseStatusCode response
-      let body = getResponseBody response
-      if | st == 409 -> do
-             let ex = decodeDbxException request st body
-             case ex of
-               DbxNotFoundException{} -> return ()
-               _ -> putStrLn
-                    $ "Received status code " ++ show st ++ ", aborting"
-             throw ex
-         | st == 429 -> do
-             putStrLn "Exceeded rate limit"
-             flagRateLimit body
-             return Nothing
-         | st `div` 100 == 5 -> do -- retry
-             putStrLn $ "Received status code " ++ show st ++ ", retrying..."
-             return Nothing
-         | st `div` 100 /= 2 -> do -- abort
-             putStrLn $ "Received status code " ++ show st ++ ", aborting"
-             throw $ DbxStatusCodeException request st body
-         | True -> return $ Just response
+      case mresponse of
+        Left ResponseTimeout -> do
+          putStrLn "Received ResponseTimeout, retrying..."
+          return Nothing -- retry
+        Right response -> do
+          let st = getResponseStatusCode response
+          let body = getResponseBody response
+          if | st == 409 -> do
+                 let ex = decodeDbxException request st body
+                 case ex of
+                   DbxNotFoundException{} -> return ()
+                   _ -> putStrLn
+                        $ "Received status code " ++ show st ++ ", aborting"
+                 throw ex
+             | st == 429 -> do
+                 putStrLn "Exceeded rate limit"
+                 flagRateLimit body
+                 return Nothing
+             | st `div` 100 == 5 -> do -- retry
+                 putStrLn $ ("Received status code " ++ show st
+                             ++ ", retrying...")
+                 return Nothing
+             | st `div` 100 /= 2 -> do -- abort
+                 putStrLn $ "Received status code " ++ show st ++ ", aborting"
+                 throw $ DbxStatusCodeException request st body
+             | True -> return $ Just response
     basicRequest :: Request
     basicRequest =
       defaultRequest

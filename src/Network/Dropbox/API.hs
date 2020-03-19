@@ -1,3 +1,74 @@
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BinaryLiterals #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE EmptyCase #-}
+{-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE ExplicitNamespaces #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTSyntax #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE HexFloatLiterals #-}
+{-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE IncoherentInstances #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE NPlusKPatterns #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NamedWildCards #-}
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PackageImports #-}
+{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE StarIsType #-}
+{-# LANGUAGE StaticPointers #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE TypeInType #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
+{-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveLift #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE ParallelListComp #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE UnicodeSyntax #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE MonadComprehensions#-}
+
 {-# LANGUAGE DuplicateRecordFields #-}
 
 module Network.Dropbox.API
@@ -7,6 +78,9 @@ module Network.Dropbox.API
   , Path
   , Metadata(..)
   , SymlinkInfo(..)
+  , CreateFolderArg(..)
+  , CreateFolderResult(..)
+  , createFolder
   , GetMetadataArg(..)
   , getMetadataArg
   , getMetadata
@@ -94,6 +168,80 @@ newtype SymlinkInfo = SymlinkInfo { target :: Path }
 instance FromJSON SymlinkInfo where
   parseJSON = withObject "SymlinkInfo"
     \v -> SymlinkInfo <$> v .: "target"
+
+--------------------------------------------------------------------------------
+
+newtype CreateFolderArg = CreateFolderArg { path :: Path }
+  deriving (Eq, Ord, Read, Show)
+
+instance ToJSON CreateFolderArg where
+  toJSON val = String $ path (val :: CreateFolderArg)
+
+data CreateFolderFinishResult = CFComplete { entries :: [CreateFolderResult] }
+                              | CFAsyncJobId { asyncJobId :: T.Text }
+                              | CFInProgress
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON CreateFolderFinishResult where
+  parseJSON = withObject "CreateFolderFinishResult"
+    \v -> do tag <- v .: ".tag"
+             asum [ guard (tag == String "complete")
+                    >> CFComplete <$> v .: "entries"
+                  , guard (tag == String "async_job_id")
+                    >> CFAsyncJobId <$> v .: "async_job_id"
+                  , guard (tag == String "in_progress")
+                    >> return CFInProgress
+                  ]
+
+data CreateFolderResult = CreateFolderResult Metadata
+                        | CreateFolderError T.Text
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON CreateFolderResult where
+  parseJSON = withObject "CreateFolderResult"
+    \v -> do tag <- v .: ".tag"
+             asum [ guard (tag == String "success")
+                    -- >> CreateFolderResult
+                    -- <$> (FolderMetadata
+                    --      <$> v .: "name"
+                    --      <*> v .: "id"
+                    --      <*> v .:? "path_lower"
+                    --      <*> v .:? "path_display")
+                    >> CreateFolderResult
+                    <$> (do md <- v .: "metadata"
+                            (FolderMetadata
+                             <$> md .: "name"
+                             <*> md .: "id"
+                             <*> md .:? "path_lower"
+                             <*> md .:? "path_display"))
+                  , guard (tag == String "failure")
+                    >> CreateFolderError <$> v .: "failure"
+                  ]
+
+createFolder :: Manager -> Async CreateFolderArg -> Async CreateFolderResult
+createFolder mgr args = do
+  S.concatMap S.fromList
+  |$ S.mapM createFolders
+  |$ S.chunksOf createFoldersBatchSize toList
+  |$ args
+  where
+    createFoldersBatchSize = 1000 :: Int
+    createFolders :: [CreateFolderArg] -> IO [CreateFolderResult]
+    createFolders paths
+      | null paths = return []
+      | otherwise = do
+          let arg = object [ "paths" .= paths ]
+          result <- apiCall mgr "/2/files/create_folder_batch" arg
+          case result of
+            CFComplete entries -> return entries
+            CFAsyncJobId asyncJobId -> untilJust do
+              let arg' = object [ "async_job_id" .= asyncJobId ]
+              result' <- apiCall mgr "/2/files/create_folder_batch/check" arg'
+              case result' of
+                CFComplete entries -> return $ Just entries
+                CFInProgress -> return Nothing
+                CFAsyncJobId{} -> undefined
+            CFInProgress -> undefined
 
 --------------------------------------------------------------------------------
 
@@ -207,7 +355,7 @@ splitUploadState size (UploadState content coffset count) =
 uploadStateDone :: UploadState -> Bool
 uploadStateDone (UploadState content coffset count) = BL.null content
 
-data UploadResult = UploadResult { sessionId :: T.Text }
+newtype UploadResult = UploadResult { sessionId :: T.Text }
   deriving (Eq, Ord, Read, Show)
 
 instance FromJSON UploadResult where
@@ -223,20 +371,20 @@ instance ToJSON UploadCursor where
                                                   , "offset" .= offset
                                                   ]
 
-data UploadFinishResult = Complete { entries :: [UploadFileResult] }
-                        | AsyncJobId { asyncJobId :: T.Text }
-                        | InProgress
+data UploadFinishResult = UFComplete { entries :: [UploadFileResult] }
+                        | UFAsyncJobId { asyncJobId :: T.Text }
+                        | UFInProgress
   deriving (Eq, Ord, Read, Show)
 
 instance FromJSON UploadFinishResult where
   parseJSON = withObject "UploadFinishResult"
     \v -> do tag <- v .: ".tag"
              asum [ guard (tag == String "complete")
-                    >> Complete <$> v .: "entries"
+                    >> UFComplete <$> v .: "entries"
                   , guard (tag == String "async_job_id")
-                    >> AsyncJobId <$> v .: "async_job_id"
+                    >> UFAsyncJobId <$> v .: "async_job_id"
                   , guard (tag == String "in_progress")
-                    >> return InProgress
+                    >> return UFInProgress
                   ]
 
 data UploadFileResult = UploadFileResult Metadata
@@ -262,12 +410,12 @@ instance FromJSON UploadFileResult where
 
 uploadFiles :: FileManager -> Manager
             -> Async UploadFileArg -> Async UploadFileResult
-uploadFiles fmgr mgr args = do
+uploadFiles fmgr mgr args =
   S.concatMap S.fromList
-    |$ S.mapM uploadFinish
-    |$ S.chunksOf finishBatchSize toList
-    |$ S.mapM uploadFile
-    |$ args
+  |$ S.mapM uploadFinish
+  |$ S.chunksOf finishBatchSize toList
+  |$ S.mapM uploadFile
+  |$ args
   where
     requestSize = 150000000 :: Int64 -- 150 MByte
     finishBatchSize = 1000 :: Int
@@ -309,7 +457,7 @@ uploadFiles fmgr mgr args = do
     uploadFinish uploads
       | null uploads = return []
       | otherwise = do
-          assert (length uploads > 0) $ return ()
+          assert (not (null uploads)) $ return ()
           let arg = object [ "entries" .= [ object [ "cursor" .= cursor
                                                    , "commit" .= fileArg
                                                    ]
@@ -323,13 +471,13 @@ uploadFiles fmgr mgr args = do
                         signalUploadFinish mgr)
                     $ apiCall mgr "/2/files/upload_session/finish_batch" arg
           case result of
-            Complete entries -> return entries
-            AsyncJobId asyncJobId -> untilJust do
+            UFComplete entries -> return entries
+            UFAsyncJobId asyncJobId -> untilJust do
               let arg' = object [ "async_job_id" .= asyncJobId ]
               result' <-
                 apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
               case result' of
-                Complete entries -> return $ Just entries
-                InProgress -> return Nothing
-                AsyncJobId{} -> undefined
-            InProgress -> undefined
+                UFComplete entries -> return $ Just entries
+                UFInProgress -> return Nothing
+                UFAsyncJobId{} -> undefined
+            UFInProgress -> undefined
