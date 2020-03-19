@@ -438,8 +438,12 @@ uploadFiles fmgr mgr args =
             splitUploadState requestSize uploadState
       assert (offset (headUploadState :: UploadState) == 0) $ return ()
       let arg = object [ "close" .= uploadStateDone tailUploadState ]
+      let off = 0
+      let sz = off + BL.length (content tailUploadState)
+      putStrLn $ "[uploading " ++ show off ++ "/" ++ show sz ++ "]"
       result <- sendContent mgr "/2/files/upload_session/start" arg
                 (content headUploadState)
+      putStrLn $ "[done uploading " ++ show off ++ "/" ++ show sz ++ "]"
       return (sessionId (result :: UploadResult), tailUploadState)
     uploadAppend :: T.Text -> UploadState -> IO UploadState
     uploadAppend sessionId uploadState = do
@@ -450,8 +454,12 @@ uploadFiles fmgr mgr args =
       let arg = object [ "cursor" .= cursor
                        , "close" .= uploadStateDone tailUploadState
                        ]
+      let off = offset (cursor :: UploadCursor)
+      let sz = off + BL.length (content tailUploadState)
+      putStrLn $ "[uploading " ++ show off ++ "/" ++ show sz ++ "]"
       value :: Value <- sendContent mgr "/2/files/upload_session/append_v2" arg
                         (content headUploadState)
+      putStrLn $ "[done uploading " ++ show off ++ "/" ++ show sz ++ "]"
       evaluate value -- wait for upload to complete
       return tailUploadState
     uploadFinish :: [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
