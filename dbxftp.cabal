@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 910b0841a6683080739873adcdbd5f4da5ba35cb1c29859e4f9877cc89ee3021
+-- hash: 818a79a3cc41740f9afec4dc9e4e34ec7c7d328dee1596b39f3f0af00f057575
 
 name:           dbxftp
 version:        0.0.0
@@ -48,6 +48,7 @@ library
     , bytestring
     , cmdargs
     , cryptohash-sha256
+    , deepseq
     , extra
     , filepath
     , http-client

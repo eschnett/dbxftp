@@ -95,6 +95,7 @@ module Network.Dropbox.API
   , uploadFiles
   ) where
 
+import Control.DeepSeq
 import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Class
@@ -106,6 +107,7 @@ import Data.Int
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Debug.Trace
+import GHC.Generics
 import Network.Dropbox.API.Basic
 import Network.Dropbox.Filesystem
 import Prelude hiding (concat)
@@ -316,7 +318,7 @@ data UploadFileArg = UploadFileArg { localPath :: FilePath
                                    , autorename :: Bool
                                    , mute :: Bool
                                    }
-  deriving (Eq, Ord, Read, Show)
+  deriving (Eq, Ord, Read, Show, Generic, NFData)
 
 instance ToJSON UploadFileArg where
   toJSON val = object [ "path" .= path (val :: UploadFileArg)
@@ -329,7 +331,7 @@ uploadFileArg :: FilePath -> Path -> UploadFileArg
 uploadFileArg fp path = UploadFileArg fp path writeMode False False
 
 data WriteMode = Add | Overwrite | Update T.Text
-  deriving (Eq, Ord, Read, Show)
+  deriving (Eq, Ord, Read, Show, Generic, NFData)
 
 instance ToJSON WriteMode where
   toJSON Add = String "add"
@@ -345,7 +347,7 @@ data UploadState = UploadState { content :: BL.ByteString
                                , offset :: Int64
                                , count :: Int
                                }
-  deriving (Eq, Ord, Read, Show)
+  deriving (Eq, Ord, Read, Show, Generic, NFData)
 
 splitUploadState :: Int64 -> UploadState -> (UploadState, UploadState)
 splitUploadState size (UploadState content coffset count) =
@@ -365,7 +367,7 @@ instance FromJSON UploadResult where
 data UploadCursor = UploadCursor { sessionId :: T.Text
                                  , offset :: Int64
                                  }
-  deriving (Eq, Ord, Read, Show)
+  deriving (Eq, Ord, Read, Show, Generic, NFData)
 
 instance ToJSON UploadCursor where
   toJSON (UploadCursor sessionId offset) = object [ "session_id" .= sessionId
@@ -432,7 +434,7 @@ uploadFiles fmgr mgr args =
            iterateUntilM uploadStateDone (uploadAppend sessionId) uploadState1
          let cursor =
                UploadCursor sessionId (offset (uploadState2 :: UploadState))
-         return (arg, cursor)
+         evaluate $ force (arg, cursor)
     uploadStart :: UploadState -> IO (T.Text, UploadState)
     uploadStart uploadState = do
       let (headUploadState, tailUploadState) =
@@ -446,7 +448,7 @@ uploadFiles fmgr mgr args =
                 (content headUploadState)
       traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ "]")
         $ return ()
-      return (sessionId (result :: UploadResult), tailUploadState)
+      evaluate $ force (sessionId (result :: UploadResult), tailUploadState)
     uploadAppend :: T.Text -> UploadState -> IO UploadState
     uploadAppend sessionId uploadState = do
       let (headUploadState, tailUploadState) =
@@ -464,7 +466,7 @@ uploadFiles fmgr mgr args =
       traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ "]")
         $ return ()
       evaluate value -- wait for upload to complete
-      return tailUploadState
+      evaluate $ force tailUploadState
     uploadFinish :: [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
     uploadFinish uploads
       | null uploads = return []

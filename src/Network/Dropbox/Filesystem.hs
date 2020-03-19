@@ -214,8 +214,8 @@ instance ToJSON ContentHash where
   toJSON (ContentHash hash) = String $ T.decodeUtf8 hash
 
 -- <https://www.dropbox.com/developers/reference/content-hash>
-contentHash0 :: BL.ByteString -> ContentHash
-contentHash0 content =
+contentHash :: BL.ByteString -> ContentHash
+contentHash content =
   ContentHash
   $ BL.toStrict
   $ BL.toLazyByteString
@@ -232,15 +232,15 @@ contentHash0 content =
     chunkSize = 4 * 1024 * 1024 -- 4 MByte
 
 -- might not be needed
-fileContentHash0 :: FileManager -> FilePath -> IO ContentHash
-fileContentHash0 fmgr fp =
+fileContentHash :: FileManager -> FilePath -> IO ContentHash
+fileContentHash fmgr fp =
   bracket_
   (do waitOpenFile fmgr
       traceShow ("[hashing " ++ fp ++ "]") $ return ())
   (do traceShow ("[done hashing " ++ fp ++ "]") $ return ()
       signalOpenFile fmgr)
   do content <- BL.readFile fp
-     hash <- evaluate $ contentHash0 content
+     hash <- evaluate $ contentHash content
      return hash
 
 -- <https://www.dropbox.com/developers/reference/content-hash>
@@ -269,9 +269,6 @@ fileContentHash1 fmgr fp =
       signalOpenFile fmgr)
   $ contentHash1
   $ File.toBytes fp
-
-contentHash = contentHash0
-fileContentHash = fileContentHash0
 
 -- might not be needed
 addContentHashes :: FileManager

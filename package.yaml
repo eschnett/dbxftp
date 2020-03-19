@@ -166,6 +166,7 @@ library:
     - bytestring
     - cmdargs
     - cryptohash-sha256
+    - deepseq
     - extra
     - filepath
     - http-client
