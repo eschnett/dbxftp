@@ -233,16 +233,19 @@ contentHash0 content =
 
 -- might not be needed
 fileContentHash0 :: FileManager -> FilePath -> IO ContentHash
-fileContentHash0 fmgr fp = bracket_
-                           (waitOpenFile fmgr)
-                           (signalOpenFile fmgr)
-                           do content <- BL.readFile fp
-                              hash <- evaluate $ contentHash0 content
-                              return hash
+fileContentHash0 fmgr fp =
+  bracket_
+  (do waitOpenFile fmgr
+      traceShow ("[hashing " ++ fp ++ "]") $ return ())
+  (do traceShow ("[done hashing " ++ fp ++ "]") $ return ()
+      signalOpenFile fmgr)
+  do content <- BL.readFile fp
+     hash <- evaluate $ contentHash0 content
+     return hash
 
 -- <https://www.dropbox.com/developers/reference/content-hash>
-contentHash :: Serial Word8 -> IO ContentHash
-contentHash =
+contentHash1 :: Serial Word8 -> IO ContentHash
+contentHash1 =
   (fmap (ContentHash
           . BL.toStrict
           . BL.toLazyByteString
@@ -257,15 +260,18 @@ contentHash =
   where
     chunkSize = 4 * 1024 * 1024 -- 4 MByte
 
-fileContentHash :: FileManager -> FilePath -> IO ContentHash
-fileContentHash fmgr fp =
+fileContentHash1 :: FileManager -> FilePath -> IO ContentHash
+fileContentHash1 fmgr fp =
   bracket_
   (do waitOpenFile fmgr
       traceShow ("[hashing " ++ fp ++ "]") $ return ())
   (do traceShow ("[done hashing " ++ fp ++ "]") $ return ()
       signalOpenFile fmgr)
-  $ contentHash
+  $ contentHash1
   $ File.toBytes fp
+
+contentHash = contentHash0
+fileContentHash = fileContentHash0
 
 -- might not be needed
 addContentHashes :: FileManager
