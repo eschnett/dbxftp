@@ -96,8 +96,12 @@ import qualified Data.ByteString.Builder as BL
 import qualified Data.ByteString.Lazy as BL
 import Data.List
 import qualified Data.Text.Encoding as T
+import Data.Word
 import Streamly
+import qualified Streamly.Internal.FileSystem.File as File
+import qualified Streamly.Memory.Array as A
 import qualified Streamly.Prelude as S
+import System.IO
 import System.Posix
 
 --------------------------------------------------------------------------------
@@ -209,8 +213,8 @@ instance ToJSON ContentHash where
   toJSON (ContentHash hash) = String $ T.decodeUtf8 hash
 
 -- <https://www.dropbox.com/developers/reference/content-hash>
-contentHash :: BL.ByteString -> ContentHash
-contentHash content =
+contentHash0 :: BL.ByteString -> ContentHash
+contentHash0 content =
   ContentHash
   $ BL.toStrict
   $ BL.toLazyByteString
@@ -226,13 +230,39 @@ contentHash content =
              | otherwise = Just $ BL.splitAt chunkSize bs
     chunkSize = 4 * 1024 * 1024 -- 4 MByte
 
+-- might not be needed
+fileContentHash0 :: FileManager -> FilePath -> IO ContentHash
+fileContentHash0 fmgr fp = bracket_
+                           (waitOpenFile fmgr)
+                           (signalOpenFile fmgr)
+                           do content <- BL.readFile fp
+                              hash <- evaluate $ contentHash0 content
+                              return hash
+
+-- <https://www.dropbox.com/developers/reference/content-hash>
+contentHash :: Serial Word8 -> IO ContentHash
+contentHash =
+  (fmap (ContentHash
+          . BL.toStrict
+          . BL.toLazyByteString
+          . BL.byteStringHex
+          . SHA256.hashlazy
+          . BL.fromChunks) :: IO [BS.ByteString] -> IO ContentHash)
+  . (S.toList :: Serial BS.ByteString -> IO [BS.ByteString])
+  . (S.map (SHA256.hashlazy . BL.pack . A.toList)
+      :: Serial (A.Array Word8) -> Serial BS.ByteString)
+  . (S.chunksOf chunkSize (A.writeN chunkSize)
+      :: Serial Word8 -> Serial (A.Array Word8))
+  where
+    chunkSize = 4 * 1024 * 1024 -- 4 MByte
+
 fileContentHash :: FileManager -> FilePath -> IO ContentHash
-fileContentHash fmgr fp = bracket_
-                          (waitOpenFile fmgr)
-                          (signalOpenFile fmgr)
-                          do content <- BL.readFile fp
-                             hash <- evaluate $ contentHash content
-                             return hash
+fileContentHash fmgr fp =
+  bracket_
+  (waitOpenFile fmgr)
+  (signalOpenFile fmgr)
+  $ contentHash
+  $ File.toBytes fp
 
 -- might not be needed
 addContentHashes :: FileManager

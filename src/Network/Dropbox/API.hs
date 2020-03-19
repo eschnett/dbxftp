@@ -439,7 +439,7 @@ uploadFiles fmgr mgr args =
       assert (offset (headUploadState :: UploadState) == 0) $ return ()
       let arg = object [ "close" .= uploadStateDone tailUploadState ]
       let off = 0
-      let sz = off + BL.length (content tailUploadState)
+      let sz = off + BL.length (content uploadState)
       putStrLn $ "[uploading " ++ show off ++ "/" ++ show sz ++ "]"
       result <- sendContent mgr "/2/files/upload_session/start" arg
                 (content headUploadState)
@@ -455,7 +455,7 @@ uploadFiles fmgr mgr args =
                        , "close" .= uploadStateDone tailUploadState
                        ]
       let off = offset (cursor :: UploadCursor)
-      let sz = off + BL.length (content tailUploadState)
+      let sz = off + BL.length (content uploadState)
       putStrLn $ "[uploading " ++ show off ++ "/" ++ show sz ++ "]"
       value :: Value <- sendContent mgr "/2/files/upload_session/append_v2" arg
                         (content headUploadState)
