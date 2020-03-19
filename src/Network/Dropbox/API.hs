@@ -450,8 +450,9 @@ uploadFiles fmgr mgr args =
       let arg = object [ "cursor" .= cursor
                        , "close" .= uploadStateDone tailUploadState
                        ]
-      _ :: Value <- sendContent mgr "/2/files/upload_session/append_v2" arg
-                    (content headUploadState)
+      value :: Value <- sendContent mgr "/2/files/upload_session/append_v2" arg
+                        (content headUploadState)
+      evaluate value -- wait for upload to complete
       return tailUploadState
     uploadFinish :: [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
     uploadFinish uploads
