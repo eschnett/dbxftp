@@ -105,6 +105,7 @@ import Data.Foldable hiding (toList)
 import Data.Int
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Debug.Trace
 import Network.Dropbox.API.Basic
 import Network.Dropbox.Filesystem
 import Prelude hiding (concat)
@@ -440,10 +441,11 @@ uploadFiles fmgr mgr args =
       let arg = object [ "close" .= uploadStateDone tailUploadState ]
       let off = 0
       let sz = off + BL.length (content uploadState)
-      putStrLn $ "[uploading " ++ show off ++ "/" ++ show sz ++ "]"
+      traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ "]") $ return ()
       result <- sendContent mgr "/2/files/upload_session/start" arg
                 (content headUploadState)
-      putStrLn $ "[done uploading " ++ show off ++ "/" ++ show sz ++ "]"
+      traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ "]")
+        $ return ()
       return (sessionId (result :: UploadResult), tailUploadState)
     uploadAppend :: T.Text -> UploadState -> IO UploadState
     uploadAppend sessionId uploadState = do
@@ -456,10 +458,11 @@ uploadFiles fmgr mgr args =
                        ]
       let off = offset (cursor :: UploadCursor)
       let sz = off + BL.length (content uploadState)
-      putStrLn $ "[uploading " ++ show off ++ "/" ++ show sz ++ "]"
+      traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ "]") $ return ()
       value :: Value <- sendContent mgr "/2/files/upload_session/append_v2" arg
                         (content headUploadState)
-      putStrLn $ "[done uploading " ++ show off ++ "/" ++ show sz ++ "]"
+      traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ "]")
+        $ return ()
       evaluate value -- wait for upload to complete
       return tailUploadState
     uploadFinish :: [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
