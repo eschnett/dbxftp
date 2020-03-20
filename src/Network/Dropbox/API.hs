@@ -459,7 +459,8 @@ uploadFiles fmgr mgr args =
      $ asyncly
      -- $ maxBuffer 10
      $ maxBuffer 1
-     $ maxThreads 10
+     -- $ maxThreads 10
+     $ maxThreads 1
      $ S.mapM uploadFinish
      |$ groupedFiles
 
