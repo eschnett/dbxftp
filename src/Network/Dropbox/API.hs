@@ -446,9 +446,10 @@ uploadFiles fmgr mgr args =
   -- |$ S.mapM uploadFile
   -- |$ args
 
-  let uploadedFiles = asyncly
+  let uploadedFiles = aheadly -- asyncly
                       $ S.mapM uploadFile
-                      |$ args
+                      |$ asyncly
+                      $ args
       countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
                      :: Ahead UploadCount
       groupedFiles = aheadly
@@ -456,7 +457,7 @@ uploadFiles fmgr mgr args =
                      $ S.splitOnSuffix finishUpload FL.toList
                      $ S.zipWith (,) uploadedFiles countedFiles
   in S.concatMap S.fromList
-     $ asyncly
+     $ aheadly -- asyncly
      -- $ maxBuffer 10
      $ maxBuffer 1
      -- $ maxThreads 10
