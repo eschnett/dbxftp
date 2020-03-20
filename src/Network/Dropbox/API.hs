@@ -454,9 +454,10 @@ uploadFiles fmgr mgr args =
   let uploadedFiles = S.mapM uploadFile $ asyncly args :: Serial (UploadFileArg, UploadCursor)
       countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
       groupedFiles = S.map (fmap fst) $ S.splitOnSuffix finishUpload FL.toList $ S.zipWith (,) uploadedFiles countedFiles :: Serial [(UploadFileArg, UploadCursor)]
-  in S.concatMap S.fromList $ serially $ S.mapM uploadFinish |$ groupedFiles
+  in S.concatMap S.fromList $ serially $ S.mapM uploadFinish $ groupedFiles
   where
-    requestSize = 150 * 1000* 1000 :: Int64 -- 150 MByte
+    -- requestSize = 150 * 1024 * 1024 :: Int64 -- 150 MByte
+    requestSize = 15 * 1024 * 1024 :: Int64 -- 15 MByte
     uploadFile :: UploadFileArg -> IO (UploadFileArg, UploadCursor)
     uploadFile arg =
       bracket_
