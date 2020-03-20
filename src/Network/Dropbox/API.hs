@@ -112,7 +112,7 @@ import Network.Dropbox.API.Basic
 import Network.Dropbox.Filesystem
 import Prelude hiding (concat)
 import Streamly
-import Streamly.Data.Fold (toList)
+import qualified Streamly.Data.Fold as FL
 import qualified Streamly.Prelude as S
 
 --------------------------------------------------------------------------------
@@ -225,7 +225,7 @@ createFolder :: Manager -> Async CreateFolderArg -> Async CreateFolderResult
 createFolder mgr args = do
   S.concatMap S.fromList
   |$ S.mapM createFolders
-  |$ S.chunksOf createFoldersBatchSize toList
+  |$ S.chunksOf createFoldersBatchSize FL.toList
   |$ args
   where
     createFoldersBatchSize = 1000 :: Int
@@ -344,8 +344,8 @@ writeMode :: WriteMode
 writeMode = Add
 
 data UploadState = UploadState { content :: BL.ByteString
-                               , offset :: Int64
-                               , count :: Int
+                               , offset :: !Int64
+                               , count :: !Int
                                }
   deriving (Eq, Ord, Read, Show, Generic, NFData)
 
@@ -364,8 +364,8 @@ newtype UploadResult = UploadResult { sessionId :: T.Text }
 instance FromJSON UploadResult where
   parseJSON = withObject "UploadResult" \v -> UploadResult <$> v .: "session_id"
 
-data UploadCursor = UploadCursor { sessionId :: T.Text
-                                 , offset :: Int64
+data UploadCursor = UploadCursor { sessionId :: !T.Text
+                                 , offset :: !Int64
                                  }
   deriving (Eq, Ord, Read, Show, Generic, NFData)
 
@@ -373,6 +373,28 @@ instance ToJSON UploadCursor where
   toJSON (UploadCursor sessionId offset) = object [ "session_id" .= sessionId
                                                   , "offset" .= offset
                                                   ]
+
+data UploadCount = UploadCount { fileCount :: !Int
+                               , fileSize :: !Int64
+                               , finishGroup :: !Bool
+                               }
+  deriving (Eq, Ord, Read, Show, Generic, NFData)
+
+initUploadCount :: UploadCount
+initUploadCount = UploadCount 0 0 True
+
+foldUploadCount :: UploadCount -> (UploadFileArg, UploadCursor) -> UploadCount
+foldUploadCount (UploadCount count size _) (_, cursor) =
+  let count' = count + 1
+      size' = size + offset (cursor :: UploadCursor)
+      finish = count' >= finishBatchSize || size' >= finishBatchFileSize
+  in if finish then initUploadCount else UploadCount count' size' False
+  where
+    finishBatchSize = 1000 :: Int
+    finishBatchFileSize = 150 * 1000 * 1000
+
+finishUpload :: ((UploadFileArg, UploadCursor), UploadCount) -> Bool
+finishUpload (_, UploadCount _ _ finish) = finish
 
 data UploadFinishResult = UFComplete { entries :: [UploadFileResult] }
                         | UFAsyncJobId { asyncJobId :: T.Text }
@@ -414,14 +436,20 @@ instance FromJSON UploadFileResult where
 uploadFiles :: FileManager -> Manager
             -> Async UploadFileArg -> Async UploadFileResult
 uploadFiles fmgr mgr args =
-  S.concatMap S.fromList
-  |$ S.mapM uploadFinish
-  |$ S.chunksOf finishBatchSize toList
-  |$ S.mapM uploadFile
-  |$ args
+  -- S.concatMap S.fromList
+  -- $ S.mapM uploadFinish
+  -- $ serially
+  -- |$ S.mapM uploadFinish
+  -- |$ S.chunksOf finishBatchSize FL.toList
+  -- $ asyncly
+  -- |$ S.mapM uploadFile
+  -- |$ args
+  let uploadedFiles = asyncly $ S.mapM uploadFile |$ args :: Ahead (UploadFileArg, UploadCursor)
+      countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
+      groupedFiles = S.map (fmap fst) $ S.splitOnSuffix finishUpload FL.toList $ S.zipWith (,) uploadedFiles countedFiles :: Ahead [(UploadFileArg, UploadCursor)]
+  in S.concatMap S.fromList $ aheadly $ S.mapM uploadFinish |$ groupedFiles
   where
-    requestSize = 150000000 :: Int64 -- 150 MByte
-    finishBatchSize = 1000 :: Int
+    requestSize = 150 * 1000* 1000 :: Int64 -- 150 MByte
     uploadFile :: UploadFileArg -> IO (UploadFileArg, UploadCursor)
     uploadFile arg =
       bracket_

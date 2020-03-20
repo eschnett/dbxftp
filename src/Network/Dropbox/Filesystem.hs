@@ -102,7 +102,6 @@ import Streamly
 import qualified Streamly.Internal.FileSystem.File as File
 import qualified Streamly.Memory.Array as A
 import qualified Streamly.Prelude as S
-import System.IO
 import System.Posix
 
 --------------------------------------------------------------------------------
