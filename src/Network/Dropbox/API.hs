@@ -457,7 +457,8 @@ uploadFiles fmgr mgr args =
                      $ S.zipWith (,) uploadedFiles countedFiles
   in S.concatMap S.fromList
      $ asyncly
-     $ maxBuffer 10
+     -- $ maxBuffer 10
+     $ maxBuffer 1
      $ maxThreads 10
      $ S.mapM uploadFinish
      |$ groupedFiles
@@ -504,7 +505,9 @@ uploadFiles fmgr mgr args =
       let arg = object [ "close" .= uploadStateDone tailUploadState ]
       let off = 0
       let sz = off + BL.length (content uploadState)
-      let pct = fromIntegral (round @Float @Int (10 * 100 * fromIntegral off / fromIntegral sz)) / 10 :: Float
+      let pct = if off == 0
+                then 0
+                else fromIntegral (round @Float @Int (10 * 100 * fromIntegral off / fromIntegral sz)) / 10 :: Float
       traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
       result <- sendContent mgr "/2/files/upload_session/start" arg
                 (content headUploadState)
@@ -521,7 +524,9 @@ uploadFiles fmgr mgr args =
                        ]
       let off = offset (cursor :: UploadCursor)
       let sz = off + BL.length (content uploadState)
-      let pct = fromIntegral (round @Float @Int (10 * 100 * fromIntegral off / fromIntegral sz)) / 10 :: Float
+      let pct = if off == 0
+                then 0
+                else fromIntegral (round @Float @Int (10 * 100 * fromIntegral off / fromIntegral sz)) / 10 :: Float
       traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
       value :: Value <- sendContent mgr "/2/files/upload_session/append_v2" arg
                         (content headUploadState)
