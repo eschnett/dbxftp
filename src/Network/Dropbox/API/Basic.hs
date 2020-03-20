@@ -192,6 +192,9 @@ dbxCall host argLoc resLoc mgr path arg input = do
         & (if argLoc == ArgHeader
            then setRequestBodyLBS input
            else assert (BL.null input) $ setRequestBodyJSON arg)
+        & (if argLoc == ArgHeader
+           then setResponseTimeout $ responseTimeoutMicro (300 * 1000 * 1000)
+           else id)
   response <- untilJust $ checkedHttp request
   let body = getResponseBody response :: BL.ByteString
   let result = if resLoc == ResHeader
@@ -207,6 +210,8 @@ dbxCall host argLoc resLoc mgr path arg input = do
   let output = if resLoc == ResHeader then body else BL.empty
   return (result, output)
   where
+    setResponseTimeout :: ResponseTimeout -> Request -> Request
+    setResponseTimeout timeout resp = resp { responseTimeout = timeout }
     checkedHttp :: Request -> IO (Maybe (Response BL.ByteString))
     checkedHttp request = do
       mresponse <-

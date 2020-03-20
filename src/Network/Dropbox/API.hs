@@ -446,17 +446,37 @@ uploadFiles fmgr mgr args =
   -- |$ S.mapM uploadFile
   -- |$ args
 
-  -- maxBuffer 20
-  -- let uploadedFiles = asyncly $ S.mapM uploadFile |$ args :: Ahead (UploadFileArg, UploadCursor)
-  --     countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
-  --     groupedFiles = S.map (fmap fst) $ S.splitOnSuffix finishUpload FL.toList $ S.zipWith (,) uploadedFiles countedFiles :: Ahead [(UploadFileArg, UploadCursor)]
-  -- in S.concatMap S.fromList $ aheadly $ S.mapM uploadFinish |$ groupedFiles
-
-  let uploadedFiles = S.mapM uploadFile $ asyncly args :: Serial (UploadFileArg, UploadCursor)
+  let uploadedFiles = asyncly
+                      $ S.mapM uploadFile
+                      |$ args
       countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
-      groupedFiles = S.map (fmap fst) $ S.splitOnSuffix finishUpload FL.toList $ S.zipWith (,) uploadedFiles countedFiles :: Serial [(UploadFileArg, UploadCursor)]
-  in S.concatMap S.fromList $ serially $ S.mapM uploadFinish $ groupedFiles
+                     :: Ahead UploadCount
+      groupedFiles = aheadly
+                     $ S.map (fmap fst)
+                     $ S.splitOnSuffix finishUpload FL.toList
+                     $ S.zipWith (,) uploadedFiles countedFiles
+  in S.concatMap S.fromList
+     $ asyncly
+     $ maxBuffer 10
+     $ maxThreads 10
+     $ S.mapM uploadFinish
+     |$ groupedFiles
+
+  -- let uploadedFiles = S.mapM uploadFile
+  --                     $ asyncly args
+  --                     :: Serial (UploadFileArg, UploadCursor)
+  --     countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
+  --     groupedFiles = S.map (fmap fst)
+  --                    $ S.splitOnSuffix finishUpload FL.toList
+  --                    $ S.zipWith (,) uploadedFiles countedFiles
+  --                    :: Serial [(UploadFileArg, UploadCursor)]
+  -- in S.concatMap S.fromList
+  --    $ serially
+  --    $ S.mapM uploadFinish
+  --    $ groupedFiles
+
   where
+
     -- Large requests take a long time to process, and the default
     -- request timeout is only 30 seconds. A timed-out request might
     -- still be processed correctly, and it's then difficult to find
@@ -485,10 +505,10 @@ uploadFiles fmgr mgr args =
       let off = 0
       let sz = off + BL.length (content uploadState)
       let pct = fromIntegral (round @Float @Int (10 * 100 * fromIntegral off / fromIntegral sz)) / 10 :: Float
-      traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ "(" ++ show pct ++ "%)]") $ return ()
+      traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
       result <- sendContent mgr "/2/files/upload_session/start" arg
                 (content headUploadState)
-      traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ "(" ++ show pct ++ "%)]") $ return ()
+      traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
       evaluate $ force (sessionId (result :: UploadResult), tailUploadState)
     uploadAppend :: T.Text -> UploadState -> IO UploadState
     uploadAppend sessionId uploadState = do
@@ -502,10 +522,10 @@ uploadFiles fmgr mgr args =
       let off = offset (cursor :: UploadCursor)
       let sz = off + BL.length (content uploadState)
       let pct = fromIntegral (round @Float @Int (10 * 100 * fromIntegral off / fromIntegral sz)) / 10 :: Float
-      traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ "(" ++ show pct ++ "%)]") $ return ()
+      traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
       value :: Value <- sendContent mgr "/2/files/upload_session/append_v2" arg
                         (content headUploadState)
-      traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ "(" ++ show pct ++ "%)]") $ return ()
+      traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
       evaluate value -- wait for upload to complete
       evaluate $ force tailUploadState
     uploadFinish :: [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
