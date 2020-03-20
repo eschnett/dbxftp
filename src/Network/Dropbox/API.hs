@@ -445,10 +445,16 @@ uploadFiles fmgr mgr args =
   -- $ asyncly
   -- |$ S.mapM uploadFile
   -- |$ args
-  let uploadedFiles = asyncly $ S.mapM uploadFile |$ args :: Ahead (UploadFileArg, UploadCursor)
+
+  -- let uploadedFiles = asyncly $ S.mapM uploadFile |$ args :: Ahead (UploadFileArg, UploadCursor)
+  --     countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
+  --     groupedFiles = S.map (fmap fst) $ S.splitOnSuffix finishUpload FL.toList $ S.zipWith (,) uploadedFiles countedFiles :: Ahead [(UploadFileArg, UploadCursor)]
+  -- in S.concatMap S.fromList $ aheadly $ S.mapM uploadFinish |$ groupedFiles
+
+  let uploadedFiles = S.mapM uploadFile $ asyncly args :: Serial (UploadFileArg, UploadCursor)
       countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
-      groupedFiles = S.map (fmap fst) $ S.splitOnSuffix finishUpload FL.toList $ S.zipWith (,) uploadedFiles countedFiles :: Ahead [(UploadFileArg, UploadCursor)]
-  in S.concatMap S.fromList $ aheadly $ S.mapM uploadFinish |$ groupedFiles
+      groupedFiles = S.map (fmap fst) $ S.splitOnSuffix finishUpload FL.toList $ S.zipWith (,) uploadedFiles countedFiles :: Serial [(UploadFileArg, UploadCursor)]
+  in S.concatMap S.fromList $ serially $ S.mapM uploadFinish |$ groupedFiles
   where
     requestSize = 150 * 1000* 1000 :: Int64 -- 150 MByte
     uploadFile :: UploadFileArg -> IO (UploadFileArg, UploadCursor)
