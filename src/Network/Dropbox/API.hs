@@ -390,7 +390,8 @@ foldUploadCount (UploadCount count size _) (_, cursor) =
       finish = count' >= finishBatchSize || size' >= finishBatchFileSize
   in if finish then initUploadCount else UploadCount count' size' False
   where
-    finishBatchSize = 1000 :: Int
+    -- finishBatchSize = 1000 :: Int
+    finishBatchSize = 100 :: Int
     finishBatchFileSize = 150 * 1000 * 1000
 
 finishUpload :: ((UploadFileArg, UploadCursor), UploadCount) -> Bool
