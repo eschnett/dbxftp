@@ -107,7 +107,8 @@ import System.Posix
 --------------------------------------------------------------------------------
 
 maxOpenFiles :: Int
-maxOpenFiles = 100
+-- maxOpenFiles = 100
+maxOpenFiles = 20
 
 newtype FileManager = FileManager { theOpenFiles :: QSem }
 
