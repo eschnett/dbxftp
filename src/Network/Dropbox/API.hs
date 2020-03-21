@@ -446,21 +446,31 @@ uploadFiles fmgr mgr args =
   -- |$ S.mapM uploadFile
   -- |$ args
 
-  let uploadedFiles = asyncly
-                      $ S.mapM uploadFile
-                      $ args
-      countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
-                     :: Ahead UploadCount
-      groupedFiles = aheadly
-                     $ S.map (fmap fst)
-                     $ S.splitOnSuffix finishUpload FL.toList
-                     $ S.zipWith (,) uploadedFiles countedFiles
-  in S.concatMap S.fromList
-     $ asyncly
-     $ maxBuffer 10
-     $ maxThreads 10
-     $ S.mapM uploadFinish
-     $ groupedFiles
+  -- let uploadedFiles = asyncly
+  --                     $ S.mapM uploadFile
+  --                     $ args
+  --     countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
+  --                    :: Ahead UploadCount
+  --     groupedFiles = aheadly
+  --                    $ S.map (fmap fst)
+  --                    $ S.splitOnSuffix finishUpload FL.toList
+  --                    $ S.zipWith (,) uploadedFiles countedFiles
+  -- in S.concatMap S.fromList
+  --    $ asyncly
+  --    $ maxBuffer 10
+  --    $ maxThreads 10
+  --    $ S.mapM uploadFinish
+  --    $ groupedFiles
+
+  S.concatMap S.fromList
+  $ serially
+  $ S.mapM uploadFinish
+  $ groupFiles
+  $ asyncly
+  $ maxBuffer 10
+  $ maxThreads 10
+  $ S.mapM uploadFile
+  $ args
 
   -- let uploadedFiles = serially -- aheadly -- asyncly
   --                     $ S.mapM uploadFile
@@ -502,6 +512,9 @@ uploadFiles fmgr mgr args =
     -- out whether this is the case.
     -- requestSize = 150 * 1024 * 1024 :: Int64 -- 150 MByte
     requestSize = 15 * 1024 * 1024 :: Int64 -- 15 MByte
+    -- finishBatchSize = 1000 :: Int
+    finishBatchSize = 100 :: Int
+    finishBatchFileSize = 150 * 1000 * 1000
     uploadFile :: UploadFileArg -> IO (UploadFileArg, UploadCursor)
     uploadFile arg =
       bracket_
@@ -551,6 +564,22 @@ uploadFiles fmgr mgr args =
       traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
       evaluate value -- wait for upload to complete
       evaluate $ force tailUploadState
+    groupFiles :: (IsStream t, MonadAsync m)
+               => t m (UploadFileArg, UploadCursor)
+               -> t m [(UploadFileArg, UploadCursor)]
+    groupFiles files =
+      S.map (fmap \(arg, cursor, _, _, _) -> (arg, cursor))
+      $ S.splitOnSuffix (\(_, _, _, _, finish) -> finish) FL.toList
+      $ S.postscanl' (\(_, _, count, size, _) (arg, cursor) ->
+                        let count' = count + 1
+                            size' = size + offset (cursor :: UploadCursor)
+                            finish = count' >= finishBatchSize ||
+                                     size' >= finishBatchFileSize
+                        in if finish
+                           then (arg, cursor, 0, 0, True)
+                           else (arg, cursor, count', size', False))
+                     (undefined, undefined, 0, 0, True)
+      $ files
     uploadFinish :: [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
     uploadFinish uploads
       | null uploads = return []
