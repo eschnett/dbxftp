@@ -462,14 +462,16 @@ uploadFiles fmgr mgr args =
   --    $ S.mapM uploadFinish
   --    $ groupedFiles
 
+  -- BLOCKED ON LOCKS?
   S.concatMap S.fromList
   $ serially
   $ S.mapM uploadFinish
   $ groupFiles
-  $ asyncly
+  -- $ asyncly
   $ maxBuffer 10
   $ maxThreads 10
   $ S.mapM uploadFile
+  $ asyncly
   $ args
 
   -- let uploadedFiles = serially -- aheadly -- asyncly
