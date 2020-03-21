@@ -141,17 +141,20 @@ getAccessToken =
      return token
 
 waitOpenConnection :: Manager -> IO ()
-waitOpenConnection mgr = do waitQSem (theOpenConnections mgr)
+waitOpenConnection mgr = do -- waitQSem (theOpenConnections mgr)
                             readMVar (theAvailableConnection mgr)
 
 signalOpenConnection :: Manager -> IO ()
-signalOpenConnection mgr = signalQSem (theOpenConnections mgr)
+signalOpenConnection mgr = -- signalQSem (theOpenConnections mgr)
+                           return ()
 
 waitUploadFinish :: Manager -> IO ()
-waitUploadFinish mgr = waitQSem (theUploadFinishes mgr)
+waitUploadFinish mgr = -- waitQSem (theUploadFinishes mgr)
+                       return ()
 
 signalUploadFinish :: Manager -> IO ()
-signalUploadFinish mgr = signalQSem (theUploadFinishes mgr)
+signalUploadFinish mgr = -- signalQSem (theUploadFinishes mgr)
+                         return ()
 
 delayConnection :: Manager -> Int64 -> IO ()
 delayConnection mgr delay =

@@ -116,10 +116,12 @@ newFileManager :: IO FileManager
 newFileManager = FileManager <$> newQSem maxOpenFiles
 
 waitOpenFile :: FileManager -> IO ()
-waitOpenFile fmgr = waitQSem (theOpenFiles fmgr)
+waitOpenFile fmgr = -- waitQSem (theOpenFiles fmgr)
+                    return ()
 
 signalOpenFile :: FileManager -> IO ()
-signalOpenFile fmgr = signalQSem (theOpenFiles fmgr)
+signalOpenFile fmgr = -- signalQSem (theOpenFiles fmgr)
+                      return ()
 
 --------------------------------------------------------------------------------
 

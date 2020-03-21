@@ -292,9 +292,10 @@ put fps dst = do
     $ S.trace (\_ -> countNeedUpload counters)
     $ (asyncly . maxThreads 10
        . S.mapMaybeM (needUploadFile fmgr mgr counters dstmap))
-    $ S.trace (\_ -> countFound counters)
-    $ asyncly . maxThreads 10 . listDirsRec fmgr dst
-    $ S.fromList fps
+    $ serially . S.trace (\_ -> countFound counters)
+    -- $ asyncly . maxThreads 10 . listDirsRec fmgr dst
+    $ serially . listDirsRec fmgr dst
+    $ serially $ S.fromList fps
   where
     listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
     listFolder1 mgr arg =
@@ -303,23 +304,23 @@ put fps dst = do
       $ listFolder mgr arg
     listDirsRec :: FileManager
                 -> Path
-                -> Async FilePath
-                -> Async (FilePath, FileStatus, Path)
+                -> Serial FilePath
+                -> Serial (FilePath, FileStatus, Path)
     listDirsRec fmgr dst = S.concatMap (listDirRec fmgr dst)
     listDirRec :: FileManager
                -> Path
                -> FilePath
-               -> Async (FilePath, FileStatus, Path)
+               -> Serial (FilePath, FileStatus, Path)
     listDirRec fmgr dst src = do
-      fs <- liftIO $ fileStatus fmgr src
+      fs <- S.yieldM $ fileStatus fmgr src
       if isDirectory fs
         then S.concatMap (listDirRec1 fmgr dst src) |$ listDir1 fmgr src
         else S.yield (src, fs, dst)
-    listDir1 :: FileManager -> FilePath -> Async FilePath
+    listDir1 :: FileManager -> FilePath -> Serial FilePath
     listDir1 fmgr fp = serially $ listDir fmgr fp
     listDirRec1 :: FileManager
                 -> Path -> FilePath
-                -> FilePath -> Async (FilePath, FileStatus, Path)
+                -> FilePath -> Serial (FilePath, FileStatus, Path)
     listDirRec1 fmgr dst src fp =
       listDirRec fmgr (appendPath dst fp) (src </> fp)
     appendPath :: Path -> FilePath -> Path
