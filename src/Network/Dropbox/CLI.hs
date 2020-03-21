@@ -290,7 +290,7 @@ put fps dst = do
     $ uploadFiles fmgr mgr
     $ S.map makeUploadFileArg
     $ S.trace (\_ -> countNeedUpload counters)
-    $ (asyncly . maxThreads 10
+    $ (serially -- asyncly . maxThreads 10
        . S.mapMaybeM (needUploadFile fmgr mgr counters dstmap))
     $ serially . S.trace (\_ -> countFound counters)
     -- $ asyncly . maxThreads 10 . listDirsRec fmgr dst
