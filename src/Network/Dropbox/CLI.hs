@@ -286,15 +286,15 @@ put fps dst = do
   dstlist <- S.toList $ listFolder1 mgr (ListFolderArg dst True)
   let dstmap = H.fromList $ fmap makePair dstlist
   S.drain
-    $ asyncly
     $ S.trace (\_ -> countUploaded counters)
-    |$ uploadFiles fmgr mgr
-    |$ S.map makeUploadFileArg
-    |$ S.trace (\_ -> countNeedUpload counters)
-    |$ S.filterM (needUploadFile fmgr mgr counters dstmap)
-    |$ S.trace (\_ -> countFound counters)
-    |$ listDirsRec fmgr dst
-    |$ S.fromList fps
+    $ uploadFiles fmgr mgr
+    $ S.map makeUploadFileArg
+    $ S.trace (\_ -> countNeedUpload counters)
+    $ (asyncly . maxThreads 10
+       . S.mapMaybeM (needUploadFile fmgr mgr counters dstmap))
+    $ S.trace (\_ -> countFound counters)
+    $ asyncly . maxThreads 10 . listDirsRec fmgr dst
+    $ S.fromList fps
   where
     listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
     listFolder1 mgr arg =
@@ -329,34 +329,37 @@ put fps dst = do
     makePair md = (fromMaybe (name md) (pathDisplay md), md)
     needUploadFile :: FileManager -> Manager -> IORef Counters
                    -> H.HashMap Path Metadata
-                   -> (FilePath, FileStatus, Path) -> IO Bool
-    needUploadFile fmgr mgr counters dstmap (fp, fs, p) =
+                   -> (FilePath, FileStatus, Path)
+                   -> IO (Maybe (FilePath, FileStatus, Path))
+    needUploadFile fmgr mgr counters dstmap arg@(fp, fs, p) =
       if not (isRegularFile fs)
-      then return False
+      then return Nothing
       else do
         case H.lookup p dstmap of
           Nothing -> do
             ctrs <- readIORef counters
             putStrLn $ ("Uploading " ++ show p ++ " (remote does not exist) "
                         ++ showCounters ctrs)
-            return True
+            return $ Just arg
           Just md ->
             if size md /= fromIntegral (fileSize fs)
             then do
               ctrs <- readIORef counters
               putStrLn $ ("Uploading " ++ show p ++ " (remote size differs)"
                           ++ showCounters ctrs)
-              return True
+              return $ Just arg
             else do
               ContentHash hash <- fileContentHash fmgr fp
               let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
               ctrs <- readIORef counters
               if hashDiffers
-                then putStrLn $ ("Uploading " ++ show p ++ " (hash differs)"
-                                 ++ showCounters ctrs)
-                else putStrLn $ ("Skipping " ++ show p ++ " "
-                                 ++ showCounters ctrs)
-              return hashDiffers
+                then do liftIO $ putStrLn $ ("Uploading " ++ show p
+                                              ++ " (hash differs)"
+                                              ++ showCounters ctrs)
+                        return $ Just arg
+                else do liftIO $ putStrLn $ ("Skipping " ++ show p ++ " "
+                                              ++ showCounters ctrs)
+                        return Nothing
     makeUploadFileArg :: (FilePath, FileStatus, Path) -> UploadFileArg
     makeUploadFileArg (fp, fs, p) = let mode = Overwrite
                                         autorename = False

@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 818a79a3cc41740f9afec4dc9e4e34ec7c7d328dee1596b39f3f0af00f057575
+-- hash: a38b1976f5992e2ff9a352f444dde05af5fe87c77de4df57b87ca11d65ac36ee
 
 name:           dbxftp
 version:        0.0.0
@@ -34,6 +34,7 @@ library
   exposed-modules:
       Network.Dropbox.API
       Network.Dropbox.API.Basic
+      Network.Dropbox.Benchmark
       Network.Dropbox.CLI
       Network.Dropbox.Filesystem
   other-modules:

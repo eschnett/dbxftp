@@ -434,9 +434,31 @@ instance FromJSON UploadFileResult where
                     >> UploadFileError <$> v .: "failure"
                   ]
 
+-- import Streamly
+-- import qualified Streamly.Internal.Prelude as S
+-- import qualified Streamly.Internal.Data.Fold as FL
+-- import qualified Streamly.Internal.Data.Parse as PR
+-- import qualified Streamly.Internal.FileSystem.Handle as FH
+-- import qualified Streamly.Internal.Data.Unicode.Stream as U
+-- 
+-- 
+-- {-# INLINE chunksOfTimeout #-}
+-- chunksOfTimeout :: (IsStream t, MonadAsync m)
+--     => Int -> Double -> FL.Fold m a b -> t m a -> t m b
+-- chunksOfTimeout n t f =
+--       S.splitWithSuffix isNothing (FL.lcatMaybes f)
+--     . S.interjectSuffix t (return Nothing)
+--     . S.intersperseSuffixBySpan n (return Nothing)
+--     . S.map Just
+
 uploadFiles :: FileManager -> Manager
-            -> Async UploadFileArg -> Async UploadFileResult
+            -> Serial UploadFileArg -> Serial UploadFileResult
 uploadFiles fmgr mgr args =
+  S.concatMap S.fromList
+  $ S.mapM uploadFinish
+  $ groupFiles
+  $ asyncly . maxThreads 10 . S.mapM uploadFile
+  $ serially $ args
   -- S.concatMap S.fromList
   -- $ S.mapM uploadFinish
   -- $ serially
@@ -463,16 +485,6 @@ uploadFiles fmgr mgr args =
   --    $ groupedFiles
 
   -- BLOCKED ON LOCKS?
-  S.concatMap S.fromList
-  $ serially
-  $ S.mapM uploadFinish
-  $ groupFiles
-  -- $ asyncly
-  $ maxBuffer 10
-  $ maxThreads 10
-  $ S.mapM uploadFile
-  $ asyncly
-  $ args
 
   -- let uploadedFiles = serially -- aheadly -- asyncly
   --                     $ S.mapM uploadFile
