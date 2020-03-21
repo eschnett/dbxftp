@@ -446,24 +446,40 @@ uploadFiles fmgr mgr args =
   -- |$ S.mapM uploadFile
   -- |$ args
 
-  let uploadedFiles = serially -- aheadly -- asyncly
+  let uploadedFiles = asyncly
                       $ S.mapM uploadFile
-                      |$ asyncly
                       $ args
       countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
-                     :: Serial UploadCount -- Ahead UploadCount
-      groupedFiles = serially -- aheadly
+                     :: Ahead UploadCount
+      groupedFiles = aheadly
                      $ S.map (fmap fst)
                      $ S.splitOnSuffix finishUpload FL.toList
                      $ S.zipWith (,) uploadedFiles countedFiles
   in S.concatMap S.fromList
-     $ serially -- aheadly -- asyncly
-     -- $ maxBuffer 10
-     $ maxBuffer 1
-     -- $ maxThreads 10
-     $ maxThreads 1
+     $ asyncly
+     $ maxBuffer 10
+     $ maxThreads 10
      $ S.mapM uploadFinish
-     |$ groupedFiles
+     $ groupedFiles
+
+  -- let uploadedFiles = serially -- aheadly -- asyncly
+  --                     $ S.mapM uploadFile
+  --                     |$ asyncly
+  --                     $ args
+  --     countedFiles = S.postscanl' foldUploadCount initUploadCount uploadedFiles
+  --                    :: Serial UploadCount -- Ahead UploadCount
+  --     groupedFiles = serially -- aheadly
+  --                    $ S.map (fmap fst)
+  --                    $ S.splitOnSuffix finishUpload FL.toList
+  --                    $ S.zipWith (,) uploadedFiles countedFiles
+  -- in S.concatMap S.fromList
+  --    $ serially -- aheadly -- asyncly
+  --    -- $ maxBuffer 10
+  --    $ maxBuffer 1
+  --    -- $ maxThreads 10
+  --    $ maxThreads 1
+  --    $ S.mapM uploadFinish
+  --    |$ groupedFiles
 
   -- let uploadedFiles = S.mapM uploadFile
   --                     $ asyncly args
