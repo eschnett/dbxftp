@@ -106,7 +106,6 @@ import Data.Foldable hiding (toList)
 import Data.Int
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Debug.Trace
 import GHC.Generics
 import Network.Dropbox.API.Basic
 import Network.Dropbox.Filesystem

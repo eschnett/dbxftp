@@ -356,7 +356,9 @@ put' fps dst smgr = do
                     , T.pack $ showCounters ctrs ]
                   return $ Just arg
                 else do
-                  ContentHash hash <- fileContentHash fmgr fp
+                  ContentHash hash <-
+                    withActive smgr (T.pack $ "[hashing " ++ fp ++ "]")
+                    $ fileContentHash fmgr fp
                   let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
                   ctrs <- readIORef counters
                   if hashDiffers

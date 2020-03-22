@@ -97,7 +97,6 @@ import qualified Data.ByteString.Lazy as BL
 import Data.List
 import qualified Data.Text.Encoding as T
 import Data.Word
-import Debug.Trace
 import Streamly
 import qualified Streamly.Internal.FileSystem.File as File
 import qualified Streamly.Memory.Array as A
@@ -237,10 +236,8 @@ contentHash content =
 fileContentHash :: FileManager -> FilePath -> IO ContentHash
 fileContentHash fmgr fp =
   bracket_
-  (do waitOpenFile fmgr
-      traceShow ("[hashing " ++ fp ++ "]") $ return ())
-  (do traceShow ("[done hashing " ++ fp ++ "]") $ return ()
-      signalOpenFile fmgr)
+  (waitOpenFile fmgr)
+  (signalOpenFile fmgr)
   do content <- BL.readFile fp
      hash <- evaluate $ contentHash content
      return hash
@@ -265,10 +262,8 @@ contentHash1 =
 fileContentHash1 :: FileManager -> FilePath -> IO ContentHash
 fileContentHash1 fmgr fp =
   bracket_
-  (do waitOpenFile fmgr
-      traceShow ("[hashing " ++ fp ++ "]") $ return ())
-  (do traceShow ("[done hashing " ++ fp ++ "]") $ return ()
-      signalOpenFile fmgr)
+  (waitOpenFile fmgr)
+  (signalOpenFile fmgr)
   $ contentHash1
   $ File.toBytes fp
 
