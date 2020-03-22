@@ -384,8 +384,8 @@ uploadFiles smgr fmgr mgr args =
   $ S.mapM (uploadFinish smgr mgr)
   $ groupFiles
   -- TODO: runs out of memory for parallel uploads; need ByteString.copy?
-  -- $ asyncly . maxThreads 10 . S.mapM uploadFile
-  $ serially . S.mapM (uploadFile smgr fmgr mgr)
+  $ asyncly . maxThreads 10 . S.mapM uploadFile
+  -- $ serially . S.mapM (uploadFile smgr fmgr mgr)
   $ serially $ args
   where
     -- finishBatchCount = 1000 :: Int
