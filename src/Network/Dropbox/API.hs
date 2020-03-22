@@ -457,8 +457,8 @@ uploadFiles smgr fmgr mgr args =
   S.concatMap S.fromList
   $ S.mapM uploadFinish
   $ groupFiles
-  -- $ asyncly . maxThreads 10 . S.mapM uploadFile
-  $ serially . S.mapM uploadFile
+  $ asyncly . maxThreads 10 . S.mapM uploadFile
+  -- $ serially . S.mapM uploadFile
   $ serially $ args
   where
     -- Large requests take a long time to process, and the default

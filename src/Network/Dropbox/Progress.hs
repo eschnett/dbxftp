@@ -93,7 +93,7 @@ data ScreenManager = ScreenManager { vty :: Vty
 
 addLog :: ScreenManager -> T.Text -> IO ()
 addLog smgr msg = do
-  atomicModifyIORef' (logged smgr) \msgs -> (take 20 (msg:msgs), ())
+  atomicModifyIORef' (logged smgr) \msgs -> (take 1000 (msg:msgs), ())
   displayActive smgr
 
 addActive :: ScreenManager -> T.Text -> IO ()
@@ -116,9 +116,9 @@ displayActive smgr = do
   current <- readIORef (current smgr)
   let title = text (defAttr `withForeColor` green) "DBXFTP: put"
   let img = vertCat ([title]
-                     ++ fmap (\msg -> text' defAttr msg) (reverse logged)
+                     ++ fmap (\msg -> text' defAttr msg) current
                      ++ [text defAttr ""]
-                     ++ fmap (\msg -> text' defAttr msg) (reverse current)
+                     ++ fmap (\msg -> text' defAttr msg) logged
                     )
   let pic = picForImage img
   update (vty smgr) pic
