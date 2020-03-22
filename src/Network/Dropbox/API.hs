@@ -114,6 +114,8 @@ import Prelude hiding (concat)
 import Streamly
 import qualified Streamly.Data.Fold as FL
 import qualified Streamly.Prelude as S
+import System.IO
+import System.Posix
 import Text.Printf
 
 --------------------------------------------------------------------------------
@@ -314,12 +316,13 @@ listFolder mgr arg = S.concatMap S.fromFoldable listChunks
 --------------------------------------------------------------------------------
 
 data UploadFileArg = UploadFileArg { localPath :: FilePath
+                                   , localSize :: FileOffset
                                    , path :: Path
                                    , mode :: WriteMode
                                    , autorename :: Bool
                                    , mute :: Bool
                                    }
-  deriving (Eq, Ord, Read, Show, Generic, NFData)
+  deriving (Eq, Ord, Read, Show)
 
 instance ToJSON UploadFileArg where
   toJSON val = object [ "path" .= path (val :: UploadFileArg)
@@ -328,8 +331,8 @@ instance ToJSON UploadFileArg where
                       , "mute" .= mute val
                       ]
 
-uploadFileArg :: FilePath -> Path -> UploadFileArg
-uploadFileArg fp path = UploadFileArg fp path writeMode False False
+uploadFileArg :: FilePath -> FileOffset -> Path -> UploadFileArg
+uploadFileArg fp fs path = UploadFileArg fp fs path writeMode False False
 
 data WriteMode = Add | Overwrite | Update T.Text
   deriving (Eq, Ord, Read, Show, Generic, NFData)
@@ -344,75 +347,14 @@ instance ToJSON WriteMode where
 writeMode :: WriteMode
 writeMode = Add
 
-data UploadState = UploadState { content :: BL.ByteString
-                               , offset :: !Int64
-                               , count :: !Int
-                               }
-  deriving (Eq, Ord, Read, Show, Generic, NFData)
-
-splitUploadState :: Int64 -> UploadState -> (UploadState, UploadState)
-splitUploadState size (UploadState content coffset count) =
-  let (hd, tl) = BL.splitAt size content
-  in (UploadState hd coffset count,
-      UploadState tl (coffset + BL.length hd) (count + 1))
-
-uploadStateDone :: UploadState -> Bool
-uploadStateDone (UploadState content coffset count) = BL.null content
-
-newtype UploadResult = UploadResult { sessionId :: T.Text }
-  deriving (Eq, Ord, Read, Show)
-
-instance FromJSON UploadResult where
-  parseJSON = withObject "UploadResult" \v -> UploadResult <$> v .: "session_id"
-
 data UploadCursor = UploadCursor { sessionId :: !T.Text
                                  , offset :: !Int64
                                  }
-  deriving (Eq, Ord, Read, Show, Generic, NFData)
-
-instance ToJSON UploadCursor where
-  toJSON (UploadCursor sessionId offset) = object [ "session_id" .= sessionId
-                                                  , "offset" .= offset
-                                                  ]
-
-data UploadCount = UploadCount { fileCount :: !Int
-                               , fileSize :: !Int64
-                               , finishGroup :: !Bool
-                               }
-  deriving (Eq, Ord, Read, Show, Generic, NFData)
-
-initUploadCount :: UploadCount
-initUploadCount = UploadCount 0 0 True
-
-foldUploadCount :: UploadCount -> (UploadFileArg, UploadCursor) -> UploadCount
-foldUploadCount (UploadCount count size _) (_, cursor) =
-  let count' = count + 1
-      size' = size + offset (cursor :: UploadCursor)
-      finish = count' >= finishBatchSize || size' >= finishBatchFileSize
-  in if finish then initUploadCount else UploadCount count' size' False
-  where
-    -- finishBatchSize = 1000 :: Int
-    finishBatchSize = 100 :: Int
-    finishBatchFileSize = 150 * 1000 * 1000
-
-finishUpload :: ((UploadFileArg, UploadCursor), UploadCount) -> Bool
-finishUpload (_, UploadCount _ _ finish) = finish
-
-data UploadFinishResult = UFComplete { entries :: [UploadFileResult] }
-                        | UFAsyncJobId { asyncJobId :: T.Text }
-                        | UFInProgress
   deriving (Eq, Ord, Read, Show)
 
-instance FromJSON UploadFinishResult where
-  parseJSON = withObject "UploadFinishResult"
-    \v -> do tag <- v .: ".tag"
-             asum [ guard (tag == String "complete")
-                    >> UFComplete <$> v .: "entries"
-                  , guard (tag == String "async_job_id")
-                    >> UFAsyncJobId <$> v .: "async_job_id"
-                  , guard (tag == String "in_progress")
-                    >> return UFInProgress
-                  ]
+instance ToJSON UploadCursor where
+  toJSON (UploadCursor sessionId offset) =
+    object ["session_id" .= sessionId, "offset" .= offset]
 
 data UploadFileResult = UploadFileResult Metadata
                       | UploadFileError T.Text
@@ -435,6 +377,135 @@ instance FromJSON UploadFileResult where
                     >> UploadFileError <$> v .: "failure"
                   ]
 
+uploadFiles :: ScreenManager -> FileManager -> Manager
+            -> Serial UploadFileArg -> Serial UploadFileResult
+uploadFiles smgr fmgr mgr args =
+  S.concatMap S.fromList
+  $ S.mapM (uploadFinish smgr mgr)
+  $ groupFiles
+  -- TODO: runs out of memory for parallel uploads; need ByteString.copy?
+  -- $ asyncly . maxThreads 10 . S.mapM uploadFile
+  $ serially . S.mapM (uploadFile smgr fmgr mgr)
+  $ serially $ args
+  where
+    -- finishBatchCount = 1000 :: Int
+    finishBatchCount = 100 :: Int
+    finishBatchBytes = 100 * 1000 * 1000 -- 100 MByte
+    groupFiles :: (IsStream t, MonadAsync m)
+               => t m (UploadFileArg, UploadCursor)
+               -> t m [(UploadFileArg, UploadCursor)]
+    groupFiles files =
+      S.map (fmap \(arg, cursor, _, _, _) -> (arg, cursor))
+      $ S.splitOnSuffix (\(_, _, _, _, finish) -> finish) FL.toList
+      $ S.postscanl' (\(_, _, count, size, _) (arg, cursor) ->
+                        let count' = count + 1
+                            size' = size + offset (cursor :: UploadCursor)
+                            finish = count' >= finishBatchCount ||
+                                     size' >= finishBatchBytes
+                        in if finish
+                           then (arg, cursor, 0, 0, True)
+                           else (arg, cursor, count', size', False))
+                     (undefined, undefined, 0, 0, True)
+      $ files
+
+
+
+newtype UploadResult = UploadResult { sessionId :: T.Text }
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON UploadResult where
+  parseJSON = withObject "UploadResult" \v -> UploadResult <$> v .: "session_id"
+
+uploadFile :: ScreenManager -> FileManager -> Manager
+           -> UploadFileArg -> IO (UploadFileArg, UploadCursor)
+uploadFile smgr fmgr mgr arg =
+  bracket_ (waitOpenFile fmgr) (signalOpenFile fmgr)
+  $ withFile (localPath arg) ReadMode \handle -> do
+  (sessionId, fileOffset, closed) <- uploadStart handle
+  (fileOffset, closed) <-
+    iterateUntilM snd (uploadAppend handle sessionId) (fileOffset, closed)
+  let cursor = UploadCursor sessionId fileOffset
+  return (arg, cursor)
+  where
+    chunkSize :: Int
+    -- chunkSize = 150 * 1000 * 1000 -- 150 MByte
+    -- Use a smaller chunk size to avoid timeouts
+    chunkSize = 15 * 1000 * 1000 -- 150MByte
+    uploadStart :: Handle -> IO (T.Text, Int64, Bool)
+    uploadStart handle = do
+      chunk <- BL.hGet handle chunkSize
+      close <- hIsEOF handle
+      let fileOffset = BL.length chunk
+      let arg = object [ "close" .= close ]
+      result <- withActive smgr (progressMsg fileOffset)
+                $ sendContent mgr "/2/files/upload_session/start" arg
+                $ chunk
+      return (sessionId (result :: UploadResult), fileOffset, close)
+    uploadAppend :: Handle -> T.Text
+                 -> (Int64, Bool) -> IO (Int64, Bool)
+    uploadAppend handle sessionId (fileOffset, _) = do
+      chunk <- BL.hGet handle chunkSize
+      close <- hIsEOF handle
+      let fileOffset' = fileOffset + BL.length chunk
+      let cursor = UploadCursor sessionId fileOffset
+      let arg = object ["cursor" .= cursor, "close" .= close]
+      value <- withActive smgr (progressMsg fileOffset')
+               $ sendContent mgr "/2/files/upload_session/append_v2" arg
+               $ chunk
+      evaluate (value :: Value) -- wait for upload to complete
+      return (fileOffset', close)
+    progressMsg fileOffset =
+      let off = fromIntegral fileOffset :: Int64
+          sz = fromIntegral (localSize arg) :: Int64
+      in T.pack $ printf "[uploading %d/%d (%.1f%%)]" off sz (percent off sz)
+    percent n d = 100 * fromIntegral n / fromIntegral d :: Float
+
+
+
+data UploadFinishResult = UFComplete { entries :: [UploadFileResult] }
+                        | UFAsyncJobId { asyncJobId :: !T.Text }
+                        | UFInProgress
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON UploadFinishResult where
+  parseJSON = withObject "UploadFinishResult"
+    \v -> do tag <- v .: ".tag"
+             asum [ guard (tag == String "complete")
+                    >> UFComplete <$> v .: "entries"
+                  , guard (tag == String "async_job_id")
+                    >> UFAsyncJobId <$> v .: "async_job_id"
+                  , guard (tag == String "in_progress")
+                    >> return UFInProgress
+                  ]
+
+uploadFinish :: ScreenManager -> Manager
+             -> [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
+uploadFinish smgr mgr uploads
+  | null uploads = return []
+  | otherwise = do
+      let arg = object [ "entries" .= [ object [ "cursor" .= cursor
+                                               , "commit" .= fileArg
+                                               ]
+                                      | (fileArg, cursor) <- uploads
+                                      ]
+                       ]
+      result <- bracket_ (waitUploadFinish mgr) (signalUploadFinish mgr)
+                $ withActive smgr "[finalizing upload]"
+                $ apiCall mgr "/2/files/upload_session/finish_batch" arg
+      case result of
+        UFComplete entries -> return entries
+        UFAsyncJobId asyncJobId -> untilJust do
+          let arg' = object [ "async_job_id" .= asyncJobId ]
+          result' <-
+            apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
+          case result' of
+            UFComplete entries -> return $ Just entries
+            UFInProgress -> return Nothing
+            UFAsyncJobId{} -> undefined
+        UFInProgress -> undefined
+
+
+
 -- import Streamly
 -- import qualified Streamly.Internal.Prelude as S
 -- import qualified Streamly.Internal.Data.Fold as FL
@@ -450,111 +521,3 @@ instance FromJSON UploadFileResult where
 --     . S.interjectSuffix t (return Nothing)
 --     . S.intersperseSuffixBySpan n (return Nothing)
 --     . S.map Just
-
-uploadFiles :: ScreenManager -> FileManager -> Manager
-            -> Serial UploadFileArg -> Serial UploadFileResult
-uploadFiles smgr fmgr mgr args =
-  S.concatMap S.fromList
-  $ S.mapM uploadFinish
-  $ groupFiles
-  -- TODO: runs out of memory for parallel uploads; need ByteString.copy?
-  -- $ asyncly . maxThreads 10 . S.mapM uploadFile
-  $ serially . S.mapM uploadFile
-  $ serially $ args
-  where
-    -- Large requests take a long time to process, and the default
-    -- request timeout is only 30 seconds. A timed-out request might
-    -- still be processed correctly, and it's then difficult to find
-    -- out whether this is the case.
-    -- requestSize = 150 * 1024 * 1024 :: Int64 -- 150 MByte
-    requestSize = 15 * 1024 * 1024 :: Int64 -- 15 MByte
-    -- finishBatchSize = 1000 :: Int
-    finishBatchSize = 100 :: Int
-    finishBatchFileSize = 150 * 1000 * 1000
-    percent n d = 100 * fromIntegral n / fromIntegral d :: Float
-    uploadFile :: UploadFileArg -> IO (UploadFileArg, UploadCursor)
-    uploadFile arg =
-      bracket_
-      (waitOpenFile fmgr)
-      (signalOpenFile fmgr)
-      do file <- BL.readFile (localPath arg)
-         let uploadState0 = UploadState file 0 0
-         (sessionId, uploadState1) <- uploadStart uploadState0
-         uploadState2 <-
-           iterateUntilM uploadStateDone (uploadAppend sessionId) uploadState1
-         let cursor =
-               UploadCursor sessionId (offset (uploadState2 :: UploadState))
-         evaluate $ force (arg, cursor)
-    uploadStart :: UploadState -> IO (T.Text, UploadState)
-    uploadStart uploadState = do
-      let (headUploadState, tailUploadState) =
-            splitUploadState requestSize uploadState
-      assert (offset (headUploadState :: UploadState) == 0) $ return ()
-      let arg = object [ "close" .= uploadStateDone tailUploadState ]
-      let off = 0
-      let sz = off + BL.length (content uploadState)
-      let msg = printf "[uploading %d/%d (%.1f%%)]" off sz (percent off sz)
-      result <- withActive smgr (T.pack msg)
-                $ sendContent mgr "/2/files/upload_session/start" arg
-                $ content headUploadState
-      evaluate $ force (sessionId (result :: UploadResult), tailUploadState)
-    uploadAppend :: T.Text -> UploadState -> IO UploadState
-    uploadAppend sessionId uploadState = do
-      let (headUploadState, tailUploadState) =
-            splitUploadState requestSize uploadState
-      let cursor =
-            UploadCursor sessionId (offset (headUploadState :: UploadState))
-      let arg = object [ "cursor" .= cursor
-                       , "close" .= uploadStateDone tailUploadState
-                       ]
-      let off = offset (cursor :: UploadCursor)
-      let sz = off + BL.length (content uploadState)
-      let msg = printf "[uploading %d/%d (%.1f%%)]" off sz (percent off sz)
-      value <- withActive smgr (T.pack msg)
-               $ sendContent mgr "/2/files/upload_session/append_v2" arg
-               $ content headUploadState
-      evaluate (value :: Value) -- wait for upload to complete
-      evaluate $ force tailUploadState
-    groupFiles :: (IsStream t, MonadAsync m)
-               => t m (UploadFileArg, UploadCursor)
-               -> t m [(UploadFileArg, UploadCursor)]
-    groupFiles files =
-      S.map (fmap \(arg, cursor, _, _, _) -> (arg, cursor))
-      $ S.splitOnSuffix (\(_, _, _, _, finish) -> finish) FL.toList
-      $ S.postscanl' (\(_, _, count, size, _) (arg, cursor) ->
-                        let count' = count + 1
-                            size' = size + offset (cursor :: UploadCursor)
-                            finish = count' >= finishBatchSize ||
-                                     size' >= finishBatchFileSize
-                        in if finish
-                           then (arg, cursor, 0, 0, True)
-                           else (arg, cursor, count', size', False))
-                     (undefined, undefined, 0, 0, True)
-      $ files
-    uploadFinish :: [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
-    uploadFinish uploads
-      | null uploads = return []
-      | otherwise = do
-          assert (not (null uploads)) $ return ()
-          let arg = object [ "entries" .= [ object [ "cursor" .= cursor
-                                                   , "commit" .= fileArg
-                                                   ]
-                                          | (fileArg, cursor) <- uploads
-                                          ]
-                           ]
-          result <- bracket_
-                    (waitUploadFinish mgr)
-                    (signalUploadFinish mgr)
-                    $ withActive smgr "[finalizing upload]"
-                    $ apiCall mgr "/2/files/upload_session/finish_batch" arg
-          case result of
-            UFComplete entries -> return entries
-            UFAsyncJobId asyncJobId -> untilJust do
-              let arg' = object [ "async_job_id" .= asyncJobId ]
-              result' <-
-                apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
-              case result' of
-                UFComplete entries -> return $ Just entries
-                UFInProgress -> return Nothing
-                UFAsyncJobId{} -> undefined
-            UFInProgress -> undefined

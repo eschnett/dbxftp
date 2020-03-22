@@ -372,7 +372,8 @@ put' fps dst smgr = do
                             return Nothing
               _ -> return $ Just arg
     makeUploadFileArg :: (FilePath, FileStatus, Path) -> UploadFileArg
-    makeUploadFileArg (fp, fs, p) = let mode = Overwrite
-                                        autorename = False
-                                        mute = False
-                                    in UploadFileArg fp p mode autorename mute
+    makeUploadFileArg (fp, fs, p) =
+      let mode = Overwrite
+          autorename = False
+          mute = False
+      in UploadFileArg fp (fileSize fs) p mode autorename mute
