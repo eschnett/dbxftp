@@ -78,15 +78,24 @@ module Network.Dropbox.API
   , Path
   , Metadata(..)
   , SymlinkInfo(..)
+  , CopyArg(..)
+  , CopyResult(..)
+  , copy
   , CreateFolderArg(..)
   , CreateFolderResult(..)
   , createFolder
+  , DeleteArg(..)
+  , DeleteResult(..)
+  , delete
   , GetMetadataArg(..)
   , getMetadataArg
   , getMetadata
   , ListFolderArg(..)
   , listFolderArg
   , listFolder
+  , MoveArg(..)
+  , MoveResult(..)
+  , move
   , UploadFileArg(..)
   , uploadFileArg
   , WriteMode(..)
@@ -177,19 +186,87 @@ instance FromJSON SymlinkInfo where
 
 --------------------------------------------------------------------------------
 
+data CopyArg = CopyArg { fromPath :: !Path
+                       , toPath :: !Path
+                       }
+  deriving (Eq, Ord, Read, Show)
+
+instance ToJSON CopyArg where
+  toJSON val = object [ "from_path" .= (String $ fromPath (val :: CopyArg))
+                      , "to_path" .= (String $ toPath (val :: CopyArg))
+                      ]
+
+data CopyCheckResult = CComplete { entries :: [CopyResult] }
+                     | CAsyncJobId { asyncJobId :: !T.Text }
+                     | CInProgress
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON CopyCheckResult where
+  parseJSON = withObject "CopyCheckResult"
+    \v -> do tag <- v .: ".tag"
+             asum [ guard (tag == String "complete")
+                    >> CComplete <$> v .: "entries"
+                  , guard (tag == String "async_job_id")
+                    >> CAsyncJobId <$> v .: "async_job_id"
+                  , guard (tag == String "in_progress")
+                    >> return CInProgress
+                  ]
+
+data CopyResult = CopyResult !Metadata
+                | CopyError T.Text
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON CopyResult where
+  parseJSON = withObject "CopyResult"
+    \v -> do tag <- v .: ".tag"
+             asum [ guard (tag == String "success")
+                    >> CopyResult <$> v .: "success"
+                  , guard (tag == String "failure")
+                    >> CopyError <$> v .: "failure"
+                  ]
+
+copy :: Manager -> Serial CopyArg -> Serial CopyResult
+copy mgr args =
+  S.concatMap S.fromList
+  $ S.mapM copyBatch
+  $ S.chunksOf copyBatchSize FL.toList
+  $ args
+  where
+    copyBatchSize = 1000 :: Int
+    copyBatch :: [CopyArg] -> IO [CopyResult]
+    copyBatch pairs
+      | null pairs = return []
+      | otherwise = do
+          let arg = object [ "entries" .= pairs
+                           , "autorename" .= False
+                           ]
+          result <- apiCall mgr "/2/files/copy_batch_v2" arg
+          case result of
+            CComplete entries -> return entries
+            CAsyncJobId asyncJobId -> untilJust do
+              let arg' = object [ "async_job_id" .= asyncJobId ]
+              result' <- apiCall mgr "/2/files/copy_batch/check_v2" arg'
+              case result' of
+                CComplete entries -> return $ Just entries
+                CInProgress -> return Nothing
+                CAsyncJobId{} -> undefined
+            CInProgress -> undefined
+
+--------------------------------------------------------------------------------
+
 newtype CreateFolderArg = CreateFolderArg { path :: Path }
   deriving (Eq, Ord, Read, Show)
 
 instance ToJSON CreateFolderArg where
   toJSON val = String $ path (val :: CreateFolderArg)
 
-data CreateFolderFinishResult = CFComplete { entries :: [CreateFolderResult] }
-                              | CFAsyncJobId { asyncJobId :: T.Text }
-                              | CFInProgress
+data CreateFolderCheckResult = CFComplete { entries :: [CreateFolderResult] }
+                             | CFAsyncJobId { asyncJobId :: !T.Text }
+                             | CFInProgress
   deriving (Eq, Ord, Read, Show)
 
-instance FromJSON CreateFolderFinishResult where
-  parseJSON = withObject "CreateFolderFinishResult"
+instance FromJSON CreateFolderCheckResult where
+  parseJSON = withObject "CreateFolderCheckResult"
     \v -> do tag <- v .: ".tag"
              asum [ guard (tag == String "complete")
                     >> CFComplete <$> v .: "entries"
@@ -207,12 +284,6 @@ instance FromJSON CreateFolderResult where
   parseJSON = withObject "CreateFolderResult"
     \v -> do tag <- v .: ".tag"
              asum [ guard (tag == String "success")
-                    -- >> CreateFolderResult
-                    -- <$> (FolderMetadata
-                    --      <$> v .: "name"
-                    --      <*> v .: "id"
-                    --      <*> v .:? "path_lower"
-                    --      <*> v .:? "path_display")
                     >> CreateFolderResult
                     <$> (do md <- v .: "metadata"
                             (FolderMetadata
@@ -224,12 +295,12 @@ instance FromJSON CreateFolderResult where
                     >> CreateFolderError <$> v .: "failure"
                   ]
 
-createFolder :: Manager -> Async CreateFolderArg -> Async CreateFolderResult
-createFolder mgr args = do
+createFolder :: Manager -> Serial CreateFolderArg -> Serial CreateFolderResult
+createFolder mgr args =
   S.concatMap S.fromList
-  |$ S.mapM createFolders
-  |$ S.chunksOf createFoldersBatchSize FL.toList
-  |$ args
+  $ S.mapM createFolders
+  $ S.chunksOf createFoldersBatchSize FL.toList
+  $ args
   where
     createFoldersBatchSize = 1000 :: Int
     createFolders :: [CreateFolderArg] -> IO [CreateFolderResult]
@@ -251,6 +322,68 @@ createFolder mgr args = do
 
 --------------------------------------------------------------------------------
 
+newtype DeleteArg = DeleteArg { path :: Path }
+  deriving (Eq, Ord, Read, Show)
+
+instance ToJSON DeleteArg where
+  toJSON val = object ["path" .= (String $ path (val :: DeleteArg))]
+
+data DeleteCheckResult = DComplete { entries :: [DeleteResult] }
+                       | DAsyncJobId { asyncJobId :: !T.Text }
+                       | DInProgress
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON DeleteCheckResult where
+  parseJSON = withObject "DeleteCheckResult"
+    \v -> do tag <- v .: ".tag"
+             asum [ guard (tag == String "complete")
+                    >> DComplete <$> v .: "entries"
+                  , guard (tag == String "async_job_id")
+                    >> DAsyncJobId <$> v .: "async_job_id"
+                  , guard (tag == String "in_progress")
+                    >> return DInProgress
+                  ]
+
+data DeleteResult = DeleteResult Metadata
+                  | DeleteError T.Text
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON DeleteResult where
+  parseJSON = withObject "DeleteResult"
+    \v -> do tag <- v .: ".tag"
+             asum [ guard (tag == String "success")
+                    >> DeleteResult <$> v .: "metadata"
+                  , guard (tag == String "failure")
+                    >> DeleteError <$> v .: "failure"
+                  ]
+
+delete :: Manager -> Serial DeleteArg -> Serial DeleteResult
+delete mgr args =
+  S.concatMap S.fromList
+  $ S.mapM deleteBatch
+  $ S.chunksOf deleteBatchSize FL.toList
+  $ args
+  where
+    deleteBatchSize = 1000 :: Int
+    deleteBatch :: [DeleteArg] -> IO [DeleteResult]
+    deleteBatch paths
+      | null paths = return []
+      | otherwise = do
+          let arg = object [ "entries" .= paths ]
+          result <- apiCall mgr "/2/files/delete_batch" arg
+          case result of
+            DComplete entries -> return entries
+            DAsyncJobId asyncJobId -> untilJust do
+              let arg' = object [ "async_job_id" .= asyncJobId ]
+              result' <- apiCall mgr "/2/files/delete_batch/check" arg'
+              case result' of
+                DComplete entries -> return $ Just entries
+                DInProgress -> return Nothing
+                DAsyncJobId{} -> undefined
+            DInProgress -> undefined
+
+--------------------------------------------------------------------------------
+
 newtype GetMetadataArg = GetMetadataArg { path :: Path }
   deriving (Eq, Ord, Read, Show)
 
@@ -267,8 +400,8 @@ getMetadata mgr arg =
 
 --------------------------------------------------------------------------------
 
-data ListFolderArg = ListFolderArg { path :: Path
-                                   , recursive :: Bool
+data ListFolderArg = ListFolderArg { path :: !Path
+                                   , recursive :: !Bool
                                    }
   deriving (Eq, Ord, Read, Show)
 
@@ -315,12 +448,80 @@ listFolder mgr arg = S.concatMap S.fromFoldable listChunks
 
 --------------------------------------------------------------------------------
 
-data UploadFileArg = UploadFileArg { localPath :: FilePath
-                                   , localSize :: FileOffset
-                                   , path :: Path
-                                   , mode :: WriteMode
-                                   , autorename :: Bool
-                                   , mute :: Bool
+data MoveArg = MoveArg { fromPath :: !Path
+                       , toPath :: !Path
+                       }
+  deriving (Eq, Ord, Read, Show)
+
+instance ToJSON MoveArg where
+  toJSON val = object [ "from_path" .= (String $ fromPath (val :: MoveArg))
+                      , "to_path" .= (String $ toPath (val :: MoveArg))
+                      ]
+
+data MoveCheckResult = MComplete { entries :: [MoveResult] }
+                     | MAsyncJobId { asyncJobId :: !T.Text }
+                     | MInProgress
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON MoveCheckResult where
+  parseJSON = withObject "MoveCheckResult"
+    \v -> do tag <- v .: ".tag"
+             asum [ guard (tag == String "complete")
+                    >> MComplete <$> v .: "entries"
+                  , guard (tag == String "async_job_id")
+                    >> MAsyncJobId <$> v .: "async_job_id"
+                  , guard (tag == String "in_progress")
+                    >> return MInProgress
+                  ]
+
+data MoveResult = MoveResult !Metadata
+                | MoveError T.Text
+  deriving (Eq, Ord, Read, Show)
+
+instance FromJSON MoveResult where
+  parseJSON = withObject "MoveResult"
+    \v -> do tag <- v .: ".tag"
+             asum [ guard (tag == String "success")
+                    >> MoveResult <$> v .: "success"
+                  , guard (tag == String "failure")
+                    >> MoveError <$> v .: "failure"
+                  ]
+
+move :: Manager -> Serial MoveArg -> Serial MoveResult
+move mgr args =
+  S.concatMap S.fromList
+  $ S.mapM moveBatch
+  $ S.chunksOf moveBatchSize FL.toList
+  $ args
+  where
+    moveBatchSize = 1000 :: Int
+    moveBatch :: [MoveArg] -> IO [MoveResult]
+    moveBatch pairs
+      | null pairs = return []
+      | otherwise = do
+          let arg = object [ "entries" .= pairs
+                           , "autorename" .= False
+                           ]
+          result <- apiCall mgr "/2/files/move_batch_v2" arg
+          case result of
+            MComplete entries -> return entries
+            MAsyncJobId asyncJobId -> untilJust do
+              let arg' = object [ "async_job_id" .= asyncJobId ]
+              result' <- apiCall mgr "/2/files/move_batch/check_v2" arg'
+              case result' of
+                MComplete entries -> return $ Just entries
+                MInProgress -> return Nothing
+                MAsyncJobId{} -> undefined
+            MInProgress -> undefined
+
+--------------------------------------------------------------------------------
+
+data UploadFileArg = UploadFileArg { localPath :: !FilePath
+                                   , localSize :: !FileOffset
+                                   , path :: !Path
+                                   , mode :: !WriteMode
+                                   , autorename :: !Bool
+                                   , mute :: !Bool
                                    }
   deriving (Eq, Ord, Read, Show)
 
@@ -334,7 +535,7 @@ instance ToJSON UploadFileArg where
 uploadFileArg :: FilePath -> FileOffset -> Path -> UploadFileArg
 uploadFileArg fp fs path = UploadFileArg fp fs path writeMode False False
 
-data WriteMode = Add | Overwrite | Update T.Text
+data WriteMode = Add | Overwrite | Update !T.Text
   deriving (Eq, Ord, Read, Show, Generic, NFData)
 
 instance ToJSON WriteMode where
@@ -390,7 +591,7 @@ uploadFiles smgr fmgr mgr args =
   where
     -- finishBatchCount = 1000 :: Int
     finishBatchCount = 100 :: Int
-    finishBatchBytes = 100 * 1000 * 1000 -- 100 MByte
+    finishBatchBytes = 128 * 1024 * 1024 -- 128 MByte
     groupFiles :: (IsStream t, MonadAsync m)
                => t m (UploadFileArg, UploadCursor)
                -> t m [(UploadFileArg, UploadCursor)]
@@ -428,9 +629,9 @@ uploadFile smgr fmgr mgr arg =
   return (arg, cursor)
   where
     chunkSize :: Int
-    -- chunkSize = 150 * 1000 * 1000 -- 150 MByte
+    -- chunkSize = 150 * 1024 * 1024 -- 150 MByte
     -- Use a smaller chunk size to avoid timeouts
-    chunkSize = 15 * 1000 * 1000 -- 150MByte
+    chunkSize = 16 * 1024 * 1024 -- 16 MByte
     uploadStart :: Handle -> IO (T.Text, Int64, Bool)
     uploadStart handle = do
       chunk <- BL.hGet handle chunkSize
@@ -458,17 +659,19 @@ uploadFile smgr fmgr mgr arg =
       let off = fromIntegral fileOffset :: Int64
           sz = fromIntegral (localSize arg) :: Int64
       in T.pack $ printf "[uploading %d/%d (%.1f%%)]" off sz (percent off sz)
-    percent n d = 100 * fromIntegral n / fromIntegral d :: Float
+    percent n d = if n == 0
+                  then 0
+                  else 100 * fromIntegral n / fromIntegral d :: Float
 
 
 
-data UploadFinishResult = UFComplete { entries :: [UploadFileResult] }
-                        | UFAsyncJobId { asyncJobId :: !T.Text }
-                        | UFInProgress
+data UploadFinishCheckResult = UFComplete { entries :: [UploadFileResult] }
+                             | UFAsyncJobId { asyncJobId :: !T.Text }
+                             | UFInProgress
   deriving (Eq, Ord, Read, Show)
 
-instance FromJSON UploadFinishResult where
-  parseJSON = withObject "UploadFinishResult"
+instance FromJSON UploadFinishCheckResult where
+  parseJSON = withObject "UploadFinishCheckResult"
     \v -> do tag <- v .: ".tag"
              asum [ guard (tag == String "complete")
                     >> UFComplete <$> v .: "entries"

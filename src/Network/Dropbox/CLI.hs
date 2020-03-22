@@ -93,12 +93,15 @@ data Args = Args Verbosity Cmd
   deriving (Eq, Ord, Read, Show)
 
 data Cmd = NoCmd
+         | Cp { cpFiles :: [String] }
          | Ls { lsLong :: LsLong
               , lsRecursive :: LsRecursive
               , lsFiles :: [String]
               }
          | Mkdir { mkdirDirectories :: [String] }
+         | Mv { mvFiles :: [String] }
          | Put { putFiles :: [String] }
+         | Rm { rmFiles :: [String] }
          deriving (Eq, Ord, Read, Show)
 
 data LsLong = LsShort | LsLong
@@ -121,8 +124,15 @@ makeUpdate = remapUpdate embedCmd extractCmd
 
 --------------------------------------------------------------------------------
 
+argsCp :: Mode Cmd
+argsCp = mode "cp" (Cp []) "copy files or directories"
+         (flagArg addPath "path name")
+         []
+  where addPath :: Update Cmd
+        addPath fp cp = Right $ cp { cpFiles = cpFiles cp ++ [fp] }
+
 argsLs :: Mode Cmd
-argsLs = mode "ls" (Ls LsShort LsFinal []) "list directory entries"
+argsLs = mode "ls" (Ls LsShort LsFinal []) "list files or directories"
          (flagArg addPath "path name")
          [ flagNone ["long", "l"] makeLong "show metadata"
          , flagNone ["recursive", "r"] makeRecursive
@@ -143,17 +153,32 @@ argsMkdir = mode "mkdir" (Mkdir []) "create directories"
         addPath fp mkdir =
           Right $ mkdir { mkdirDirectories = mkdirDirectories mkdir ++ [fp] }
 
+argsMv :: Mode Cmd
+argsMv = mode "mv" (Mv []) "move files or directories"
+         (flagArg addPath "path name")
+         []
+  where addPath :: Update Cmd
+        addPath fp mv = Right $ mv { mvFiles = mvFiles mv ++ [fp] }
+
 argsPut :: Mode Cmd
-argsPut = mode "put" (Put []) "upload file or directory"
+argsPut = mode "put" (Put []) "upload files or directories"
           (flagArg addPath "path name")
           []
   where addPath :: Update Cmd
         addPath fp put = Right $ put { putFiles = putFiles put ++ [fp] }
 
+argsRm :: Mode Cmd
+argsRm = mode "rm" (Rm []) "delete files and directories"
+         (flagArg addPath "path name")
+         []
+  where addPath :: Update Cmd
+        addPath fp rm =
+          Right $ rm { rmFiles = rmFiles rm ++ [fp] }
+
 args :: Mode Args
 args = modes "dbxftp" (Args Normal NoCmd)
        "An ftp-like command line interface to DropBox"
-       (remapArgs <$> [argsLs, argsMkdir, argsPut])
+       (remapArgs <$> [argsCp, argsLs, argsMkdir, argsMv, argsRm, argsPut])
        -- (flagsVerbosity makeVerbose)
   where makeVerbose :: Verbosity -> Args -> Args
         makeVerbose verb (Args _ cmd) = Args verb cmd
@@ -169,12 +194,31 @@ main = do
 
 runCmd :: Cmd -> IO ()
 runCmd NoCmd = putStrLn "No command given."
+runCmd (Cp fps)
+  | null fps = putStrLn "Need at least 1 argument"
+  | otherwise = let (srcs, dst) = (T.pack <$> init fps, T.pack $ last fps)
+                in cp srcs dst
 runCmd (Ls long recursive fps) = ls long recursive $ fmap T.pack fps
 runCmd (Mkdir fps) = mkdir $ fmap T.pack fps
+runCmd (Mv fps)
+  | null fps = putStrLn "Need at least 1 argument"
+  | otherwise = let (srcs, dst) = (T.pack <$> init fps, T.pack $ last fps)
+                in mv srcs dst
 runCmd (Put fps)
   | null fps = putStrLn "Need at least 1 argument"
   | otherwise = let (srcs, dst) = (init fps, T.pack $ last fps)
                 in put srcs dst
+runCmd (Rm fps) = rm $ fmap T.pack fps
+
+--------------------------------------------------------------------------------
+
+cp :: [Path] -> Path -> IO ()
+cp fps dst = do
+  mgr <- liftIO newManager
+  S.drain
+    $ (copy mgr :: Serial CopyArg -> Serial CopyResult)
+    $ (S.map (\fp -> CopyArg fp dst) :: Serial Path -> Serial CopyArg)
+    $ (S.fromList fps :: Serial Path)
 
 --------------------------------------------------------------------------------
 
@@ -240,10 +284,19 @@ mkdir :: [Path] -> IO ()
 mkdir fps = do
   mgr <- liftIO newManager
   S.drain
-    $ asyncly
-    $ (createFolder mgr :: Async CreateFolderArg -> Async CreateFolderResult)
-    |$ (S.map CreateFolderArg :: Async Path -> Async CreateFolderArg)
-    |$ (S.fromList fps :: Async Path)
+    $ (createFolder mgr :: Serial CreateFolderArg -> Serial CreateFolderResult)
+    $ (S.map CreateFolderArg :: Serial Path -> Serial CreateFolderArg)
+    $ (S.fromList fps :: Serial Path)
+
+--------------------------------------------------------------------------------
+
+mv :: [Path] -> Path -> IO ()
+mv fps dst = do
+  mgr <- liftIO newManager
+  S.drain
+    $ (move mgr :: Serial MoveArg -> Serial MoveResult)
+    $ (S.map (\fp -> MoveArg fp dst) :: Serial Path -> Serial MoveArg)
+    $ (S.fromList fps :: Serial Path)
 
 --------------------------------------------------------------------------------
 
@@ -377,3 +430,13 @@ put' fps dst smgr = do
           autorename = False
           mute = False
       in UploadFileArg fp (fileSize fs) p mode autorename mute
+
+--------------------------------------------------------------------------------
+
+rm :: [Path] -> IO ()
+rm fps = do
+  mgr <- liftIO newManager
+  S.drain
+    $ (delete mgr :: Serial DeleteArg -> Serial DeleteResult)
+    $ (S.map DeleteArg :: Serial Path -> Serial DeleteArg)
+    $ (S.fromList fps :: Serial Path)
