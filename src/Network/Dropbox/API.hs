@@ -110,10 +110,12 @@ import Debug.Trace
 import GHC.Generics
 import Network.Dropbox.API.Basic
 import Network.Dropbox.Filesystem
+import Network.Dropbox.Progress
 import Prelude hiding (concat)
 import Streamly
 import qualified Streamly.Data.Fold as FL
 import qualified Streamly.Prelude as S
+import Text.Printf
 
 --------------------------------------------------------------------------------
 
@@ -450,9 +452,9 @@ instance FromJSON UploadFileResult where
 --     . S.intersperseSuffixBySpan n (return Nothing)
 --     . S.map Just
 
-uploadFiles :: FileManager -> Manager
+uploadFiles :: ScreenManager -> FileManager -> Manager
             -> Serial UploadFileArg -> Serial UploadFileResult
-uploadFiles fmgr mgr args =
+uploadFiles smgr fmgr mgr args =
   S.concatMap S.fromList
   $ S.mapM uploadFinish
   $ groupFiles
@@ -469,6 +471,7 @@ uploadFiles fmgr mgr args =
     -- finishBatchSize = 1000 :: Int
     finishBatchSize = 100 :: Int
     finishBatchFileSize = 150 * 1000 * 1000
+    percent n d = 100 * fromIntegral n / fromIntegral d :: Float
     uploadFile :: UploadFileArg -> IO (UploadFileArg, UploadCursor)
     uploadFile arg =
       bracket_
@@ -490,13 +493,10 @@ uploadFiles fmgr mgr args =
       let arg = object [ "close" .= uploadStateDone tailUploadState ]
       let off = 0
       let sz = off + BL.length (content uploadState)
-      let pct = if off == 0
-                then 0
-                else fromIntegral (round @Float @Int (10 * 100 * fromIntegral off / fromIntegral sz)) / 10 :: Float
-      traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
-      result <- sendContent mgr "/2/files/upload_session/start" arg
-                (content headUploadState)
-      traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
+      let msg = printf "[uploading %d/%d (%.1f%%)]" off sz (percent off sz)
+      result <- withActive smgr (T.pack msg)
+                $ sendContent mgr "/2/files/upload_session/start" arg
+                $ content headUploadState
       evaluate $ force (sessionId (result :: UploadResult), tailUploadState)
     uploadAppend :: T.Text -> UploadState -> IO UploadState
     uploadAppend sessionId uploadState = do
@@ -509,14 +509,11 @@ uploadFiles fmgr mgr args =
                        ]
       let off = offset (cursor :: UploadCursor)
       let sz = off + BL.length (content uploadState)
-      let pct = if off == 0
-                then 0
-                else fromIntegral (round @Float @Int (10 * 100 * fromIntegral off / fromIntegral sz)) / 10 :: Float
-      traceShow ("[uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
-      value :: Value <- sendContent mgr "/2/files/upload_session/append_v2" arg
-                        (content headUploadState)
-      traceShow ("[done uploading " ++ show off ++ "/" ++ show sz ++ " (" ++ show pct ++ "%)]") $ return ()
-      evaluate value -- wait for upload to complete
+      let msg = printf "[uploading %d/%d (%.1f%%)]" off sz (percent off sz)
+      value <- withActive smgr (T.pack msg)
+               $ sendContent mgr "/2/files/upload_session/append_v2" arg
+               $ content headUploadState
+      evaluate (value :: Value) -- wait for upload to complete
       evaluate $ force tailUploadState
     groupFiles :: (IsStream t, MonadAsync m)
                => t m (UploadFileArg, UploadCursor)
@@ -546,10 +543,9 @@ uploadFiles fmgr mgr args =
                                           ]
                            ]
           result <- bracket_
-                    (do waitUploadFinish mgr
-                        putStrLn "[uploading...]")
-                    (do putStrLn "[done uploading]"
-                        signalUploadFinish mgr)
+                    (waitUploadFinish mgr)
+                    (signalUploadFinish mgr)
+                    $ withActive smgr "[finalizing upload]"
                     $ apiCall mgr "/2/files/upload_session/finish_batch" arg
           case result of
             UFComplete entries -> return entries

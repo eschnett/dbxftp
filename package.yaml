@@ -180,6 +180,7 @@ library:
     - unix
     - unordered-containers
     - vector
+    - vty
     - yaml
   source-dirs: src
 

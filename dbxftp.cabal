@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: a38b1976f5992e2ff9a352f444dde05af5fe87c77de4df57b87ca11d65ac36ee
+-- hash: 78a5f6c38e5bea7cc2c263d5f236578351ba1dac0effd7da4d4b8d87ef68bd5f
 
 name:           dbxftp
 version:        0.0.0
@@ -37,6 +37,7 @@ library
       Network.Dropbox.Benchmark
       Network.Dropbox.CLI
       Network.Dropbox.Filesystem
+      Network.Dropbox.Progress
   other-modules:
       Paths_dbxftp
   hs-source-dirs:
@@ -63,6 +64,7 @@ library
     , unix
     , unordered-containers
     , vector
+    , vty
     , yaml
   default-language: Haskell2010
 

@@ -75,14 +75,13 @@ import Control.Exception
 import Control.Monad.IO.Class
 import qualified Data.HashMap.Strict as H
 import Data.IORef
-import Data.List
 import Data.Maybe
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
 import Network.Dropbox.API hiding (mode)
 import Network.Dropbox.Filesystem hiding (contentHash)
-import Prelude
+import Network.Dropbox.Progress
 import Streamly
 import qualified Streamly.Prelude as S
 import System.Console.CmdArgs.Explicit
@@ -279,7 +278,10 @@ countUploaded counters =
   \counter -> (counter { uploaded = uploaded counter + 1}, ())
 
 put :: [FilePath] -> Path -> IO ()
-put fps dst = do
+put fps dst = runWithProgress (put' fps dst)
+
+put' :: [FilePath] -> Path -> ScreenManager -> IO ()
+put' fps dst smgr = do
   counters <- newCounters
   fmgr <- liftIO newFileManager
   mgr <- newManager
@@ -287,7 +289,7 @@ put fps dst = do
   let dstmap = H.fromList $ fmap makePair dstlist
   S.drain
     $ S.trace (\_ -> countUploaded counters)
-    $ uploadFiles fmgr mgr
+    $ uploadFiles smgr fmgr mgr
     $ S.map makeUploadFileArg
     $ S.trace (\_ -> countNeedUpload counters)
     $ (serially -- asyncly . maxThreads 10
@@ -339,28 +341,34 @@ put fps dst = do
         case H.lookup p dstmap of
           Nothing -> do
             ctrs <- readIORef counters
-            putStrLn $ ("Uploading " ++ show p ++ " (remote does not exist) "
-                        ++ showCounters ctrs)
+            addLog smgr $ T.concat
+              [ "Uploading ", T.pack $ show p, " (remote does not exist) "
+              , T.pack $ showCounters ctrs ]
             return $ Just arg
           Just md ->
-            if size md /= fromIntegral (fileSize fs)
-            then do
-              ctrs <- readIORef counters
-              putStrLn $ ("Uploading " ++ show p ++ " (remote size differs)"
-                          ++ showCounters ctrs)
-              return $ Just arg
-            else do
-              ContentHash hash <- fileContentHash fmgr fp
-              let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
-              ctrs <- readIORef counters
-              if hashDiffers
-                then do liftIO $ putStrLn $ ("Uploading " ++ show p
-                                              ++ " (hash differs)"
-                                              ++ showCounters ctrs)
-                        return $ Just arg
-                else do liftIO $ putStrLn $ ("Skipping " ++ show p ++ " "
-                                              ++ showCounters ctrs)
-                        return Nothing
+            case md of
+              FileMetadata{} ->
+                if size md /= fromIntegral (fileSize fs)
+                then do
+                  ctrs <- readIORef counters
+                  addLog smgr $ T.concat
+                    [ "Uploading ", T.pack $ show p, " (remote size differs)"
+                    , T.pack $ showCounters ctrs ]
+                  return $ Just arg
+                else do
+                  ContentHash hash <- fileContentHash fmgr fp
+                  let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
+                  ctrs <- readIORef counters
+                  if hashDiffers
+                    then do liftIO $ addLog smgr $ T.concat
+                              [ "Uploading ", T.pack $ show p, " (hash differs)"
+                              , T.pack $ showCounters ctrs ]
+                            return $ Just arg
+                    else do liftIO $ addLog smgr $ T.concat
+                              [ "Skipping ", T.pack $ show p, " "
+                              , T.pack $ showCounters ctrs ]
+                            return Nothing
+              _ -> return $ Just arg
     makeUploadFileArg :: (FilePath, FileStatus, Path) -> UploadFileArg
     makeUploadFileArg (fp, fs, p) = let mode = Overwrite
                                         autorename = False
