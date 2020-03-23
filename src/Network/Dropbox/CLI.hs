@@ -388,8 +388,9 @@ put fps dst = runWithProgress \smgr -> do
                                  _ -> Nothing)
                 $ S.fromList srclist
           )
-    -- $ groupFiles
-    $ S.chunksOf 100 FL.toList
+    $ groupFiles
+    -- $ groupBy (\_ _ -> ()) () (\_ -> False) FL.toList
+    -- $ S.chunksOf 100 FL.toList
     $ filterA (\(fp, fs, p) -> isRegularFile fs)
     $ S.trace (\(fp, fs, p) -> addLog smgr $ T.pack $ "Found " ++ fp)
     $ listDirsRec fmgr dst
@@ -451,8 +452,13 @@ mapMaybeA f = S.mapMaybeM (return . f)
 groupBy :: (IsStream t, MonadAsync m)
         => (b -> a -> b) -> b -> (b -> Bool) -> FL.Fold m a c -> t m a -> t m c
 groupBy step init pred fold =
-  S.splitOnSuffix (\(_, b) -> pred b) (FL.lmap (\(Just a, _) -> a) fold)
-  . S.postscanl' (\(_, b) a -> (Just a, step b a)) (Nothing, init)
+  S.splitOnSuffix pred' fold' . S.postscanl' step' init'
+  where step' (_, b) a = let b' = step b a
+                             b'' = if pred b' then init else b'
+                         in (Just a, b'')
+        init' = (Nothing, init)
+        pred' (_, b) = pred b
+        fold' = FL.lmap (\(Just a, _) -> a) fold
 
 listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
 listFolder1 mgr arg =
