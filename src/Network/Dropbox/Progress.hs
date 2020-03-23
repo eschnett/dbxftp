@@ -89,41 +89,57 @@ import Graphics.Vty
 -- TODO: Use Data.Sequence from "containers" instead of []
 
 data ScreenManager = ScreenManager { vty :: Vty
-                                   , logged :: IORef [T.Text]
-                                   , current :: IORef [T.Text]
+                                   , logged :: IORef [(T.Text, T.Text)]
+                                   , current :: IORef [(T.Text, T.Text)]
                                    }
 
-addLog :: ScreenManager -> T.Text -> IO ()
+addLog :: ScreenManager -> (T.Text, T.Text) -> IO ()
 addLog smgr msg = do
   atomicModifyIORef' (logged smgr) \msgs -> (take 20 (msg:msgs), ())
   -- displayActive smgr
 
-addActive :: ScreenManager -> T.Text -> IO ()
+addActive :: ScreenManager -> (T.Text, T.Text) -> IO ()
 addActive smgr msg = do
   atomicModifyIORef' (current smgr) \msgs -> (msg:msgs, ())
   -- displayActive smgr
 
-removeActive :: ScreenManager -> T.Text -> IO ()
+removeActive :: ScreenManager -> (T.Text, T.Text) -> IO ()
 removeActive smgr msg = do
   atomicModifyIORef' (current smgr) \msgs -> (filter (/= msg) msgs, ())
   -- displayActive smgr
 
-withActive :: ScreenManager -> T.Text -> IO a -> IO a
+withActive :: ScreenManager -> (T.Text, T.Text) -> IO a -> IO a
 withActive smgr msg =
   bracket_ (addActive smgr msg) (removeActive smgr msg)
 
 displayActive :: ScreenManager -> IO ()
 displayActive smgr = do
+  let out = outputIface (vty smgr)
+  reg <- displayBounds out
   logged <- readIORef (logged smgr)
   current <- readIORef (current smgr)
   let title = text (defAttr `withForeColor` green) "DBXFTP: put"
   let img = vertCat ([title]
-                     ++ fmap (\msg -> text' defAttr msg) (reverse logged)
+                     ++ fmap (textImage reg) (reverse logged)
                      ++ [text defAttr ""]
-                     ++ fmap (\msg -> text' defAttr msg) (reverse current)
+                     ++ fmap (textImage reg) (reverse current)
                     )
   let pic = picForImage img
   update (vty smgr) pic
+
+textImage :: DisplayRegion -> (T.Text, T.Text) -> Image
+textImage reg (l, r) = joinImages reg (text' defAttr l) (text' defAttr r)
+
+joinImages :: DisplayRegion -> Image -> Image -> Image
+joinImages reg l r =
+  let w = regionWidth reg
+      wl = imageWidth l
+      wr = imageWidth r
+  in if wl + wr <= w
+     then l <|> r
+     else let ell = text' defAttr "..."
+              r' = ell <|> cropLeft (w - wl - imageWidth ell) r
+          in l <|> r'
 
 runWithProgress :: (ScreenManager -> IO ()) -> IO ()
 runWithProgress f = do

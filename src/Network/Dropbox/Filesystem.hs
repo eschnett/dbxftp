@@ -238,7 +238,7 @@ fileContentHash0 smgr fmgr fp =
   bracket_
   (waitOpenFile fmgr)
   (signalOpenFile fmgr)
-  $ withActive smgr (T.pack $ printf "[hashing %s]" fp)
+  $ withActive smgr (T.pack $ printf "[hashing ", T.pack $ printf "%s]" fp)
   do content <- BL.readFile fp
      hash <- evaluate $ contentHash content
      return hash
@@ -252,8 +252,8 @@ fileContentHash smgr fmgr fp =
   size <- hFileSize h
   hashes <- whileM (not <$> hIsEOF h) do
     offset <- hTell h
-    withActive smgr (T.pack
-                     $ printf "[hashing (%.1f%%) %s]" (percent offset size) fp)
+    withActive smgr ( T.pack $ printf "[hashing (%.1f%%) " (percent offset size)
+                    , T.pack $ printf "%s]" fp)
       do chunk <- BL.hGet h chunkSize
          -- eof <- hIsEOF h
          -- assert (if BL.length chunk < fromIntegral chunkSize then eof else not eof) $ return ()

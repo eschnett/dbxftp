@@ -656,8 +656,8 @@ uploadContent smgr fmgr mgr arg =
     progressMsg fileOffset =
       let off = fromIntegral fileOffset :: Int64
           sz = fromIntegral (localSize arg) :: Int64
-      in T.pack
-         $ printf "[uploading (%.1f%%) %s]" (percent off sz) (localPath arg)
+      in ( T.pack $ printf "[uploading (%.1f%%) " (percent off sz)
+         , T.pack $ printf "%s]" (localPath arg))
     percent n d = if n == 0
                   then 0
                   else 100 * fromIntegral n / fromIntegral d :: Float
@@ -692,7 +692,7 @@ uploadFinish smgr mgr uploads
                                       ]
                        ]
       result <- bracket_ (waitUploadFinish mgr) (signalUploadFinish mgr)
-                $ withActive smgr "[finalizing upload]"
+                $ withActive smgr ("[finalizing upload]", "")
                 $ apiCall mgr "/2/files/upload_session/finish_batch" arg
       case result of
         UFComplete entries -> return entries

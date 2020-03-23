@@ -347,15 +347,14 @@ put :: [FilePath] -> Path -> IO ()
 put fps dst = runWithProgress \smgr -> do
   fmgr <- liftIO newFileManager
   mgr <- newManager
-  dstlist <- withActive smgr "[scanning remote files]"
+  dstlist <- withActive smgr ("[scanning remote files]", "")
              $ S.toList $ listFolder1 mgr (ListFolderArg dst True)
-  addLog smgr $ T.pack $ "Found " ++ show dstlist
   let pathMap = makePathMap dstlist
   let hashMap = makeHashMap dstlist
   S.mapM_ (\srclist -> do
-              addLog smgr "Starting batch"
+              addLog smgr ("Starting batch", "")
               -- Calculate local content hashes
-              addLog smgr "Within batch: Calculating content hashes"
+              addLog smgr ("Within batch: Calculating content hashes", "")
               srclist <- S.toList
                 $ S.mapM (addDestination smgr fmgr pathMap hashMap)
                 $ (asyncly . maxThreads 10
@@ -364,7 +363,7 @@ put fps dst = runWithProgress \smgr -> do
                 $ S.fromList srclist
               -- Remove directories that are in the way
               -- TODO: Save files that will be copied below
-              addLog smgr "Within batch: Starting remote deletions"
+              addLog smgr ("Within batch: Starting remote deletions", "")
               S.drain
                 $ delete mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
@@ -373,7 +372,7 @@ put fps dst = runWithProgress \smgr -> do
                                  _ -> Nothing)
                 $ S.fromList srclist
               -- Copy files
-              addLog smgr "Within batch: Starting remote copies"
+              addLog smgr ("Within batch: Starting remote copies", "")
               S.drain
                 $ copy smgr mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
@@ -382,7 +381,7 @@ put fps dst = runWithProgress \smgr -> do
                                   _ -> Nothing)
                 $ S.fromList srclist
               -- Upload files
-              addLog smgr "Within batch: Starting uploads"
+              addLog smgr ("Within batch: Starting uploads", "")
               S.drain
                 $ upload smgr fmgr mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
@@ -391,7 +390,7 @@ put fps dst = runWithProgress \smgr -> do
                                    Just $ uploadArg fp (fileSize fs) p
                                  _ -> Nothing)
                 $ S.fromList srclist
-              addLog smgr "Finished batch"
+              addLog smgr ("Finished batch", "")
           )
     $ groupFiles
     -- $ groupBy (\_ _ -> ()) () (\_ -> False) FL.toList
@@ -528,11 +527,14 @@ chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
                         return (RemoveExisting, Copy (identifier md))
   where
     uploading reason =
-      addLog smgr $ T.pack $ printf "Uploading %s to %s (%s)" fp p reason
+      addLog smgr $ ( T.pack $ printf "Uploading "
+                    , T.pack $ printf "%s (%s)" fp reason)
     copying =
-      addLog smgr $ T.pack $ printf "Copying %s from existing remote file" fp
+      addLog smgr $ ( T.pack $ printf "Copying "
+                    , T.pack $ printf "%s from existing remote file" fp)
     skipping =
-      addLog smgr $ T.pack $ printf "Skipping %s" fp
+      addLog smgr $ ( T.pack $ printf "Skipping "
+                    , T.pack $ printf "%s" fp)
 
 --------------------------------------------------------------------------------
 
