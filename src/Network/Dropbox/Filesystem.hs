@@ -252,8 +252,8 @@ fileContentHash smgr fmgr fp =
   size <- hFileSize h
   hashes <- whileM (not <$> hIsEOF h) do
     offset <- hTell h
-    withActive smgr ( T.pack $ printf "[hashing (%.1f%%) " (percent offset size)
-                    , T.pack $ printf "%s]" fp)
+    withActive smgr ( T.pack $ printf "[hashing "
+                    , T.pack $ printf "%s (%.1f%%)]" fp (percent offset size))
       do chunk <- BL.hGet h chunkSize
          -- eof <- hIsEOF h
          -- assert (if BL.length chunk < fromIntegral chunkSize then eof else not eof) $ return ()
