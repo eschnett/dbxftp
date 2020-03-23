@@ -353,8 +353,9 @@ put fps dst = runWithProgress \smgr -> do
   let pathMap = makePathMap dstlist
   let hashMap = makeHashMap dstlist
   S.mapM_ (\srclist -> do
-              addLog smgr $ T.pack $ "srclist: " ++ show srclist
+              addLog smgr "Starting batch"
               -- Calculate local content hashes
+              addLog smgr "Calculating content hashes"
               srclist <- S.toList
                 $ S.mapM (addDestination smgr fmgr pathMap hashMap)
                 $ (asyncly . maxThreads 10
@@ -363,6 +364,7 @@ put fps dst = runWithProgress \smgr -> do
                 $ S.fromList srclist
               -- Remove directories that are in the way
               -- TODO: Save files that will be copied below
+              addLog smgr "Starting remote deletions"
               S.drain
                 $ delete mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
@@ -371,6 +373,7 @@ put fps dst = runWithProgress \smgr -> do
                                  _ -> Nothing)
                 $ S.fromList srclist
               -- Copy files
+              addLog smgr "Starting remote copies"
               S.drain
                 $ copy smgr mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
@@ -379,6 +382,7 @@ put fps dst = runWithProgress \smgr -> do
                                   _ -> Nothing)
                 $ S.fromList srclist
               -- Upload files
+              addLog smgr "Starting uploads"
               S.drain
                 $ upload smgr fmgr mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
@@ -387,6 +391,7 @@ put fps dst = runWithProgress \smgr -> do
                                    Just $ uploadArg fp (fileSize fs) p
                                  _ -> Nothing)
                 $ S.fromList srclist
+              addLog smgr "Finished batch"
           )
     $ groupFiles
     -- $ groupBy (\_ _ -> ()) () (\_ -> False) FL.toList
@@ -453,12 +458,13 @@ groupBy :: (IsStream t, MonadAsync m)
         => (b -> a -> b) -> b -> (b -> Bool) -> FL.Fold m a c -> t m a -> t m c
 groupBy step init pred fold =
   S.splitOnSuffix pred' fold' . S.postscanl' step' init'
-  where step' (_, b) a = let b' = step b a
-                             b'' = if pred b' then init else b'
-                         in (Just a, b'')
-        init' = (Nothing, init)
-        pred' (_, b) = pred b
-        fold' = FL.lmap (\(Just a, _) -> a) fold
+  where step' (_, b, _) a = let b' = step b a
+                                done = pred b'
+                                b'' = if done then init else b'
+                            in (Just a, b'', done)
+        init' = (Nothing, init, True)
+        pred' (_, _, done) = done
+        fold' = FL.lmap (\(Just a, _, _) -> a) fold
 
 listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
 listFolder1 mgr arg =
