@@ -83,6 +83,7 @@ import Control.Concurrent
 import Control.Exception
 import Control.Monad.Loops
 import Data.IORef
+import Data.List
 import qualified Data.Text as T
 import Graphics.Vty
 
@@ -122,7 +123,7 @@ displayActive smgr = do
   let img = vertCat ([title]
                      ++ fmap (textImage reg) (reverse logged)
                      ++ [text defAttr ""]
-                     ++ fmap (textImage reg) (reverse current)
+                     ++ fmap (textImage reg) (sort current)
                     )
   let pic = picForImage img
   update (vty smgr) pic
