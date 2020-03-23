@@ -489,8 +489,7 @@ chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
         Nothing -> do uploading "remote does not exist"
                       return (NoPreparation, Upload)
         Just md -> do copying
-                      -- TODO: need to remove file
-                      return (NoPreparation, Copy (identifier md))
+                      return (RemoveExisting, Copy (identifier md))
     Just md -> case md of
       FileMetadata{} -> do
         let remoteHash = contentHash md
@@ -502,7 +501,13 @@ chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
             Nothing -> do uploading "hash mismatch"
                           return (NoPreparation, Upload)
             Just md -> do copying
-                          return (NoPreparation, Copy (identifier md))
+                          return (RemoveExisting, Copy (identifier md))
+      _ -> do
+        case H.lookup fh hashMap of
+          Nothing -> do uploading "hash mismatch"
+                        return (RemoveExisting, Upload)
+          Just md -> do copying
+                        return (RemoveExisting, Copy (identifier md))
   where
     uploading reason =
       addLog smgr $ T.pack $ printf "Uploading %s to %s (%s)" fp p reason
