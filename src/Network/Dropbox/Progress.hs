@@ -79,7 +79,9 @@ module Network.Dropbox.Progress
   , runWithProgress
   ) where
 
+import Control.Concurrent
 import Control.Exception
+import Control.Monad.Loops
 import Data.IORef
 import qualified Data.Text as T
 import Graphics.Vty
@@ -94,17 +96,17 @@ data ScreenManager = ScreenManager { vty :: Vty
 addLog :: ScreenManager -> T.Text -> IO ()
 addLog smgr msg = do
   atomicModifyIORef' (logged smgr) \msgs -> (take 20 (msg:msgs), ())
-  displayActive smgr
+  -- displayActive smgr
 
 addActive :: ScreenManager -> T.Text -> IO ()
 addActive smgr msg = do
   atomicModifyIORef' (current smgr) \msgs -> (msg:msgs, ())
-  displayActive smgr
+  -- displayActive smgr
 
 removeActive :: ScreenManager -> T.Text -> IO ()
 removeActive smgr msg = do
   atomicModifyIORef' (current smgr) \msgs -> (filter (/= msg) msgs, ())
-  displayActive smgr
+  -- displayActive smgr
 
 withActive :: ScreenManager -> T.Text -> IO a -> IO a
 withActive smgr msg =
@@ -130,8 +132,13 @@ runWithProgress f = do
   logged <- newIORef []
   current <- newIORef []
   let smgr = ScreenManager vty logged current
-  displayActive smgr
+  flag <- newEmptyMVar
+  painter <- forkIO do
+    whileM_ (isEmptyMVar flag) do
+      displayActive smgr
+      threadDelay (1000 * 1000)
+    takeMVar flag
   f smgr
+  putMVar flag ()
+  putMVar flag ()
   shutdown vty
-
--- USE Data.ByteString.copy to free data!
