@@ -88,6 +88,7 @@ import System.Console.CmdArgs.Explicit
 import System.Console.CmdArgs.Verbosity
 import System.FilePath
 import System.Posix
+import Text.Printf
 
 data Args = Args Verbosity Cmd
   deriving (Eq, Ord, Read, Show)
@@ -300,6 +301,16 @@ mv fps dst = do
 
 --------------------------------------------------------------------------------
 
+data Destination = Upload    -- need upload
+                 | Copy Path -- can copy from existing file
+                 | Skip      -- already exists on remote
+                 | Ignore    -- wrong file type; cannot upload
+  deriving (Eq, Ord, Read, Show)
+
+data Preparation = NoPreparation  -- no preparation necessary
+                 | RemoveExisting -- need to remove existing entry
+  deriving (Eq, Ord, Read, Show)
+
 data Counters = Counters { found :: !Int
                          , needUpload :: !Int
                          , uploaded :: !Int
@@ -335,33 +346,164 @@ put fps dst = runWithProgress (put' fps dst)
 
 put' :: [FilePath] -> Path -> ScreenManager -> IO ()
 put' fps dst smgr = do
-  counters <- newCounters
   fmgr <- liftIO newFileManager
   mgr <- newManager
+  counters <- newCounters
   dstlist <- S.toList $ listFolder1 mgr (ListFolderArg dst True)
-  let dstmap = H.fromList $ fmap makePair dstlist
+  let pathMap = makePathMap dstlist
+  let hashMap = makeHashMap dstlist
+  srclist <- S.toList
+             $ S.trace (\_ -> countNeedUpload counters)
+             $ S.mapM (addDestination fmgr pathMap hashMap)
+             $ S.mapM (addFileContentHash fmgr)
+             $ S.trace (\_ -> countFound counters)
+             $ S.filter (\(fp, fs, p) -> isRegularFile fs)
+             $ listDirsRec fmgr dst
+             $ S.fromList fps
+  -- Remove directories that are in the way
+  -- TODO: Save files that will be copied below
+  S.drain
+    $ delete mgr
+    $ S.map (\(fp, fs, fh, p, prep, dest) -> DeleteArg p)
+    $ S.filter (\(fp, fs, fh, p, prep, dest) -> prep == RemoveExisting)
+    $ S.fromList srclist
+  -- Copy files
+  S.drain
+    $ copy mgr
+    $ S.map (\(fp, fs, fh, p, prep, Copy src) -> CopyArg src p)
+    $ S.filter (\(fp, fs, fh, p, prep, dest) -> case dest of Copy{} -> True
+                                                             _ -> False)
+    $ S.fromList srclist
+  -- Upload files
   S.drain
     $ S.trace (\_ -> countUploaded counters)
     $ uploadFiles smgr fmgr mgr
-    $ S.map makeUploadFileArg
-    $ S.trace (\_ -> countNeedUpload counters)
-    $ (serially -- asyncly . maxThreads 10
-       . S.mapMaybeM (needUploadFile fmgr mgr counters dstmap))
-    $ serially . S.trace (\_ -> countFound counters)
-    -- $ asyncly . maxThreads 10 . listDirsRec fmgr dst
-    $ serially . listDirsRec fmgr dst
-    $ serially $ S.fromList fps
+    $ S.map (\(fp, fs, fh, p, prep, dest) -> uploadFileArg fp (fileSize fs) p)
+    $ S.filter (\(fp, fs, fh, p, prep, dest) -> dest == Upload)
+    $ S.fromList srclist
   where
-    listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
-    listFolder1 mgr arg =
-      S.handle (\case DbxNotFoundException {} -> S.nil
-                      ex -> liftIO $ throw ex)
-      $ listFolder mgr arg
-    listDirsRec :: FileManager
-                -> Path
-                -> Serial FilePath
-                -> Serial (FilePath, FileStatus, Path)
-    listDirsRec fmgr dst = S.concatMap (listDirRec fmgr dst)
+    makePathMap :: [Metadata] -> H.HashMap Path Metadata
+    makePathMap =
+      H.fromList
+      . fmap (\md -> (T.toLower (name md), md))
+      . filter isMetadata
+    isMetadata NoMetadata = False
+    isMetadata _ = True
+    makeHashMap :: [Metadata] -> H.HashMap T.Text Metadata
+    makeHashMap =
+      H.fromList
+      . fmap (\md -> (contentHash md, md))
+      . filter isFile
+    isFile FileMetadata{} = True
+    isFile _ = False
+    addFileContentHash :: FileManager
+                       -> (FilePath, FileStatus, Path)
+                       -> IO (FilePath, FileStatus, T.Text, Path)
+    addFileContentHash fmgr (fp, fs, p) = do
+      ContentHash fh <- withActive smgr (T.pack $ printf "[hashing %s]" fp)
+                        $ fileContentHash fmgr fp
+      return (fp, fs, T.decodeUtf8 fh, p)
+    addDestination :: FileManager
+                   -> H.HashMap Path Metadata
+                   -> H.HashMap T.Text Metadata
+                   -> (FilePath, FileStatus, T.Text, Path)
+                   -> IO (FilePath, FileStatus, T.Text, Path,
+                          Preparation, Destination)
+    addDestination fmgr pathMap hashMap (fp, fs, fh, p) = do
+      (prep, dest) <-
+        chooseDestination smgr fmgr pathMap hashMap (fp, fs, fh, p)
+      return (fp, fs, fh, p, prep, dest)
+
+chooseDestination :: ScreenManager -> FileManager
+                  -> H.HashMap Path Metadata
+                  -> H.HashMap T.Text Metadata
+                  -> (FilePath, FileStatus, T.Text, Path)
+                  -> IO (Preparation, Destination)
+chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
+  case H.lookup (T.toLower p) pathMap of
+    Nothing ->
+      case H.lookup fh hashMap of
+        Nothing -> do uploading "remote does not exist"
+                      return (NoPreparation, Upload)
+        Just md -> do copying
+                      return (NoPreparation, Copy (identifier md))
+    Just md -> case md of
+      FileMetadata{} -> do
+        let remoteHash = contentHash md
+        if fh == remoteHash
+          then do skipping
+                  return (NoPreparation, Skip)
+          else
+          case H.lookup fh hashMap of
+            Nothing -> do uploading "hash mismatch"
+                          return (NoPreparation, Upload)
+            Just md -> do copying
+                          return (NoPreparation, Copy (identifier md))
+  where
+    uploading reason =
+      addLog smgr $ T.pack $ printf "Uploading %s (%s)" fp reason
+    copying =
+      addLog smgr $ T.pack $ printf "Copying %s from existing remote file" fp
+    skipping =
+      addLog smgr $ T.pack $ printf "Skipping %s" fp
+
+
+--             ctrs <- readIORef counters
+--             addLog smgr $ T.concat
+--               [ "Uploading ", T.pack $ show p, " (remote does not exist) "
+--               , T.pack $ showCounters ctrs ]
+--             return (NoPreparation, Upload)
+--           Just md -> do
+--             case md of
+--               FileMetadata{} ->
+--                 if size md /= fromIntegral (fileSize fs)
+--                 then do
+--                   ctrs <- readIORef counters
+--                   addLog smgr $ T.concat
+--                     [ "Uploading ", T.pack $ show p, " (remote size differs)"
+--                     , T.pack $ showCounters ctrs ]
+--                   return Upload
+--                 else do
+--                   ContentHash hash <-
+--                     withActive smgr (T.pack $ "[hashing " ++ fp ++ "]")
+--                     $ fileContentHash fmgr fp
+--                   let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
+--                   ctrs <- readIORef counters
+--                   if hashDiffers
+--                     then do liftIO $ addLog smgr $ T.concat
+--                               [ "Uploading ", T.pack $ show p, " (hash differs)"
+--                               , T.pack $ showCounters ctrs ]
+--                             return Upload
+--                     else do liftIO $ addLog smgr $ T.concat
+--                               [ "Skipping ", T.pack $ show p, " "
+--                               , T.pack $ showCounters ctrs ]
+--                             return Skip
+--               _ -> do liftIO $ addLog smgr $ T.concat
+--                         [ "Uploading ", T.pack $ show p
+--                         , " (remote file type differs)"
+--                         , T.pack $ showCounters ctrs ]
+--                       return (RemoveExisting, Upload)
+--     makeUploadFileArg :: (FilePath, FileStatus, Path) -> UploadFileArg
+--     makeUploadFileArg (fp, fs, p) =
+--       let mode = Overwrite
+--           autorename = False
+--           mute = False
+--       in UploadFileArg fp (fileSize fs) p mode autorename mute
+--     makeCopyArg :: (FilePath, FileStatus, Path) -> CopyArg
+--     makeCopyArg (fp, fs, p) = CopyArg fpfp p
+
+listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
+listFolder1 mgr arg =
+  S.handle (\case DbxNotFoundException {} -> S.nil
+                  ex -> liftIO $ throw ex)
+  $ listFolder mgr arg
+
+listDirsRec :: FileManager
+            -> Path
+            -> Serial FilePath
+            -> Serial (FilePath, FileStatus, Path)
+listDirsRec fmgr dst = S.concatMap (listDirRec fmgr dst)
+  where
     listDirRec :: FileManager
                -> Path
                -> FilePath
@@ -380,56 +522,6 @@ put' fps dst smgr = do
       listDirRec fmgr (appendPath dst fp) (src </> fp)
     appendPath :: Path -> FilePath -> Path
     appendPath p fp = T.concat [p, "/", T.pack $ takeFileName fp]
-    makePair :: Metadata -> (Path, Metadata)
-    makePair NoMetadata = ("<not found>", NoMetadata)
-    makePair md = (fromMaybe (name md) (pathDisplay md), md)
-    needUploadFile :: FileManager -> Manager -> IORef Counters
-                   -> H.HashMap Path Metadata
-                   -> (FilePath, FileStatus, Path)
-                   -> IO (Maybe (FilePath, FileStatus, Path))
-    needUploadFile fmgr mgr counters dstmap arg@(fp, fs, p) =
-      if not (isRegularFile fs)
-      then return Nothing
-      else do
-        case H.lookup p dstmap of
-          Nothing -> do
-            ctrs <- readIORef counters
-            addLog smgr $ T.concat
-              [ "Uploading ", T.pack $ show p, " (remote does not exist) "
-              , T.pack $ showCounters ctrs ]
-            return $ Just arg
-          Just md ->
-            case md of
-              FileMetadata{} ->
-                if size md /= fromIntegral (fileSize fs)
-                then do
-                  ctrs <- readIORef counters
-                  addLog smgr $ T.concat
-                    [ "Uploading ", T.pack $ show p, " (remote size differs)"
-                    , T.pack $ showCounters ctrs ]
-                  return $ Just arg
-                else do
-                  ContentHash hash <-
-                    withActive smgr (T.pack $ "[hashing " ++ fp ++ "]")
-                    $ fileContentHash fmgr fp
-                  let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
-                  ctrs <- readIORef counters
-                  if hashDiffers
-                    then do liftIO $ addLog smgr $ T.concat
-                              [ "Uploading ", T.pack $ show p, " (hash differs)"
-                              , T.pack $ showCounters ctrs ]
-                            return $ Just arg
-                    else do liftIO $ addLog smgr $ T.concat
-                              [ "Skipping ", T.pack $ show p, " "
-                              , T.pack $ showCounters ctrs ]
-                            return Nothing
-              _ -> return $ Just arg
-    makeUploadFileArg :: (FilePath, FileStatus, Path) -> UploadFileArg
-    makeUploadFileArg (fp, fs, p) =
-      let mode = Overwrite
-          autorename = False
-          mute = False
-      in UploadFileArg fp (fileSize fs) p mode autorename mute
 
 --------------------------------------------------------------------------------
 
