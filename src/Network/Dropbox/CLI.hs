@@ -359,7 +359,7 @@ put' fps dst smgr = do
                 . S.mapM (addFileContentHash fmgr)
                 . serially)
              -- $ S.trace (\_ -> countFound counters)
-             $ S.filter (\(fp, fs, p) -> isRegularFile fs)
+             $ filterA (\(fp, fs, p) -> isRegularFile fs)
              $ listDirsRec fmgr dst
              $ S.fromList fps
   -- Remove directories that are in the way
@@ -367,21 +367,21 @@ put' fps dst smgr = do
   S.drain
     $ delete mgr
     $ S.map (\(fp, fs, fh, p, prep, dest) -> DeleteArg p)
-    $ S.filter (\(fp, fs, fh, p, prep, dest) -> prep == RemoveExisting)
+    $ filterA (\(fp, fs, fh, p, prep, dest) -> prep == RemoveExisting)
     $ S.fromList srclist
   -- Copy files
   S.drain
     $ copy mgr
     $ S.map (\(fp, fs, fh, p, prep, Copy src) -> CopyArg src p)
-    $ S.filter (\(fp, fs, fh, p, prep, dest) -> case dest of Copy{} -> True
-                                                             _ -> False)
+    $ filterA (\(fp, fs, fh, p, prep, dest) -> case dest of Copy{} -> True
+                                                            _ -> False)
     $ S.fromList srclist
   -- Upload files
   S.drain
     -- $ S.trace (\_ -> countUploaded counters)
     $ uploadFiles smgr fmgr mgr
     $ S.map (\(fp, fs, fh, p, prep, dest) -> uploadFileArg fp (fileSize fs) p)
-    $ S.filter (\(fp, fs, fh, p, prep, dest) -> dest == Upload)
+    $ filterA (\(fp, fs, fh, p, prep, dest) -> dest == Upload)
     $ S.fromList srclist
   where
     makePathMap :: [Metadata] -> H.HashMap Path Metadata
@@ -414,6 +414,14 @@ put' fps dst smgr = do
       (prep, dest) <-
         chooseDestination smgr fmgr pathMap hashMap (fp, fs, fh, p)
       return (fp, fs, fh, p, prep, dest)
+
+filterA :: (IsStream t, MonadAsync m) => (a -> Bool) -> t m a -> t m a
+filterA pred = filterMA (return . pred)
+
+filterMA :: (IsStream t, MonadAsync m) => (a -> m Bool) -> t m a -> t m a
+filterMA pred =
+  S.mapMaybeM \x -> do p <- pred x
+                       return if p then Just x else Nothing
 
 listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
 listFolder1 mgr arg =

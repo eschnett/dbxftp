@@ -249,18 +249,25 @@ fileContentHash smgr fmgr fp =
   (waitOpenFile fmgr)
   (signalOpenFile fmgr)
   $ withActive smgr (T.pack $ printf "[hashing %s]" fp)
-  $ withFile fp ReadMode \h ->
-  do hashes <- whileM (not <$> hIsEOF h) do
-       chunk <- BL.hGet h chunkSize
-       return $ (BL.fromStrict . SHA256.hashlazy) chunk
-     return $ (ContentHash
-               . BL.toStrict
-               . BL.toLazyByteString
-               . BL.byteStringHex
-               . SHA256.hashlazy
-               . BL.concat) hashes
+  $ withFile fp ReadMode \h -> do
+  size <- hFileSize h
+  hashes <- whileM (not <$> hIsEOF h) do
+    offset <- hTell h
+    withActive smgr (T.pack
+                     $ printf "[hashing %s (%.1f%%)]" fp (percent offset size))
+      do chunk <- BL.hGet h chunkSize
+         evaluate $ (BL.fromStrict . SHA256.hashlazy) chunk
+  return $ (ContentHash
+            . BL.toStrict
+            . BL.toLazyByteString
+            . BL.byteStringHex
+            . SHA256.hashlazy
+            . BL.concat) hashes
   where 
     chunkSize = 4 * 1024 * 1024 -- 4 MByte
+    percent n d = if n == 0
+                  then 0
+                  else 100 * fromIntegral n / fromIntegral d :: Float
 
 -- <https://www.dropbox.com/developers/reference/content-hash>
 contentHash1 :: Serial Word8 -> IO ContentHash
