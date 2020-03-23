@@ -351,42 +351,42 @@ put fps dst = runWithProgress \smgr -> do
              $ S.toList $ listFolder1 mgr (ListFolderArg dst True)
   let pathMap = makePathMap dstlist
   let hashMap = makeHashMap dstlist
-  S.drain
-    $ S.mapM (\srclist -> do
-                 -- Calculate local content hashes
-                 srclist <- S.toList
-                   $ S.mapM (addDestination smgr fmgr pathMap hashMap)
-                   $ (asyncly . maxThreads 10
-                      . S.mapM (addFileContentHash smgr fmgr)
-                      . serially)
-                   $ S.fromList srclist
-                 -- Remove directories that are in the way
-                 -- TODO: Save files that will be copied below
-                 S.drain
-                   $ delete mgr
-                   $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
-                                  case prep of
-                                    RemoveExisting -> Just $ DeleteArg p
-                                    _ -> Nothing)
-                   $ S.fromList srclist
-                 -- Copy files
-                 S.drain
-                   $ copy smgr mgr
-                   $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
-                                   case dest of
-                                     Copy src -> Just $ CopyArg src p
-                                     _ -> Nothing)
-                   $ S.fromList srclist
-                 -- Upload files
-                 S.drain
-                   $ upload smgr fmgr mgr
-                   $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
-                                  case dest of
-                                    Upload ->
-                                      Just $ uploadArg fp (fileSize fs) p
-                                    _ -> Nothing)
-                   $ S.fromList srclist
-             )
+  S.mapM_ (\srclist -> do
+              addLog smgr $ T.pack $ "srclist: " ++ show srclist
+              -- Calculate local content hashes
+              srclist <- S.toList
+                $ S.mapM (addDestination smgr fmgr pathMap hashMap)
+                $ (asyncly . maxThreads 10
+                   . S.mapM (addFileContentHash smgr fmgr)
+                   . serially)
+                $ S.fromList srclist
+              -- Remove directories that are in the way
+              -- TODO: Save files that will be copied below
+              S.drain
+                $ delete mgr
+                $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
+                               case prep of
+                                 RemoveExisting -> Just $ DeleteArg p
+                                 _ -> Nothing)
+                $ S.fromList srclist
+              -- Copy files
+              S.drain
+                $ copy smgr mgr
+                $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
+                                case dest of
+                                  Copy src -> Just $ CopyArg src p
+                                  _ -> Nothing)
+                $ S.fromList srclist
+              -- Upload files
+              S.drain
+                $ upload smgr fmgr mgr
+                $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
+                               case dest of
+                                 Upload ->
+                                   Just $ uploadArg fp (fileSize fs) p
+                                 _ -> Nothing)
+                $ S.fromList srclist
+          )
     $ groupFiles
     $ filterA (\(fp, fs, p) -> isRegularFile fs)
     $ listDirsRec fmgr dst
