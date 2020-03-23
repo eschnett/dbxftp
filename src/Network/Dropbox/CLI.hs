@@ -83,6 +83,8 @@ import Network.Dropbox.API hiding (mode)
 import Network.Dropbox.Filesystem hiding (contentHash)
 import Network.Dropbox.Progress
 import Streamly
+import qualified Streamly.Data.Fold as FL
+import qualified Streamly.Internal.Data.Fold as FL (lmap)
 import qualified Streamly.Prelude as S
 import System.Console.CmdArgs.Explicit
 import System.Console.CmdArgs.Verbosity
@@ -348,41 +350,49 @@ put' :: [FilePath] -> Path -> ScreenManager -> IO ()
 put' fps dst smgr = do
   fmgr <- liftIO newFileManager
   mgr <- newManager
-  -- counters <- newCounters
   dstlist <- S.toList $ listFolder1 mgr (ListFolderArg dst True)
   let pathMap = makePathMap dstlist
   let hashMap = makeHashMap dstlist
-  srclist <- S.toList
-             -- $ S.trace (\_ -> countNeedUpload counters)
-             $ S.mapM (addDestination fmgr pathMap hashMap)
-             $ (asyncly . maxThreads 10
-                . S.mapM (addFileContentHash fmgr)
-                . serially)
-             -- $ S.trace (\_ -> countFound counters)
-             $ filterA (\(fp, fs, p) -> isRegularFile fs)
-             $ listDirsRec fmgr dst
-             $ S.fromList fps
-  -- Remove directories that are in the way
-  -- TODO: Save files that will be copied below
   S.drain
-    $ delete mgr
-    $ S.map (\(fp, fs, fh, p, prep, dest) -> DeleteArg p)
-    $ filterA (\(fp, fs, fh, p, prep, dest) -> prep == RemoveExisting)
-    $ S.fromList srclist
-  -- Copy files
-  S.drain
-    $ copy mgr
-    $ S.map (\(fp, fs, fh, p, prep, Copy src) -> CopyArg src p)
-    $ filterA (\(fp, fs, fh, p, prep, dest) -> case dest of Copy{} -> True
-                                                            _ -> False)
-    $ S.fromList srclist
-  -- Upload files
-  S.drain
-    -- $ S.trace (\_ -> countUploaded counters)
-    $ uploadFiles smgr fmgr mgr
-    $ S.map (\(fp, fs, fh, p, prep, dest) -> uploadFileArg fp (fileSize fs) p)
-    $ filterA (\(fp, fs, fh, p, prep, dest) -> dest == Upload)
-    $ S.fromList srclist
+    $ S.mapM (\srclist -> do
+                 -- Calculate local content hashes
+                 srclist <- S.toList
+                   $ S.mapM (addDestination fmgr pathMap hashMap)
+                   $ (asyncly . maxThreads 10
+                      . S.mapM (addFileContentHash fmgr)
+                      . serially)
+                   $ S.fromList srclist
+                 -- Remove directories that are in the way
+                 -- TODO: Save files that will be copied below
+                 S.drain
+                   $ delete mgr
+                   $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
+                                  case prep of
+                                    RemoveExisting -> Just $ DeleteArg p
+                                    _ -> Nothing)
+                   $ S.fromList srclist
+                 -- Copy files
+                 S.drain
+                   $ copy mgr
+                   $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
+                                   case dest of
+                                     Copy src -> Just $ CopyArg src p
+                                     _ -> Nothing)
+                   $ S.fromList srclist
+                 -- Upload files
+                 S.drain
+                   $ uploadFiles smgr fmgr mgr
+                   $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
+                                  case dest of
+                                    Upload ->
+                                      Just $ uploadFileArg fp (fileSize fs) p
+                                    _ -> Nothing)
+                   $ S.fromList srclist
+             )
+    $ groupFiles
+    $ filterA (\(fp, fs, p) -> isRegularFile fs)
+    $ listDirsRec fmgr dst
+    $ S.fromList fps
   where
     makePathMap :: [Metadata] -> H.HashMap Path Metadata
     makePathMap =
@@ -398,6 +408,15 @@ put' fps dst smgr = do
       . filter isFile
     isFile FileMetadata{} = True
     isFile _ = False
+    batchCount = 100
+    batchBytes = 128 * 1024 * 1024 -- 128 MByte
+    groupFiles :: Serial (FilePath, FileStatus, Path)
+               -> Serial [(FilePath, FileStatus, Path)]
+    groupFiles =
+      groupBy (\(count, bytes) (fp, fs, p) -> (count + 1, bytes + fileSize fs))
+              (0, 0)
+              (\(count, bytes) -> count >= batchCount || bytes >= batchBytes)
+              FL.toList
     addFileContentHash :: FileManager
                        -> (FilePath, FileStatus, Path)
                        -> IO (FilePath, FileStatus, T.Text, Path)
@@ -422,6 +441,15 @@ filterMA :: (IsStream t, MonadAsync m) => (a -> m Bool) -> t m a -> t m a
 filterMA pred =
   S.mapMaybeM \x -> do p <- pred x
                        return if p then Just x else Nothing
+
+mapMaybeA :: (IsStream t, MonadAsync m) => (a -> Maybe b) -> t m a -> t m b
+mapMaybeA f = S.mapMaybeM (return . f)
+
+groupBy :: (IsStream t, MonadAsync m)
+        => (b -> a -> b) -> b -> (b -> Bool) -> FL.Fold m a c -> t m a -> t m c
+groupBy step init pred fold =
+  S.splitOnSuffix (\(_, b) -> pred b) (FL.lmap (\(Just a, _) -> a) fold)
+  . S.postscanl' (\(_, b) a -> (Just a, step b a)) (Nothing, init)
 
 listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
 listFolder1 mgr arg =

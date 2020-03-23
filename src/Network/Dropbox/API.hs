@@ -621,7 +621,7 @@ uploadFile :: ScreenManager -> FileManager -> Manager
            -> UploadFileArg -> IO (UploadFileArg, UploadCursor)
 uploadFile smgr fmgr mgr arg =
   bracket_ (waitOpenFile fmgr) (signalOpenFile fmgr)
-  $ withFile (localPath arg) ReadMode \handle -> do
+  $ withBinaryFile (localPath arg) ReadMode \handle -> do
   (sessionId, fileOffset, closed) <- uploadStart handle
   (fileOffset, closed) <-
     iterateUntilM snd (uploadAppend handle sessionId) (fileOffset, closed)

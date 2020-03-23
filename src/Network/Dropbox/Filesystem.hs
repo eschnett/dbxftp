@@ -248,7 +248,7 @@ fileContentHash smgr fmgr fp =
   bracket_
   (waitOpenFile fmgr)
   (signalOpenFile fmgr)
-  $ withFile fp ReadMode \h -> do
+  $ withBinaryFile fp ReadMode \h -> do
   size <- hFileSize h
   hashes <- whileM (not <$> hIsEOF h) do
     offset <- hTell h
