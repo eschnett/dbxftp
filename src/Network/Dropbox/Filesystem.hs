@@ -248,13 +248,12 @@ fileContentHash smgr fmgr fp =
   bracket_
   (waitOpenFile fmgr)
   (signalOpenFile fmgr)
-  $ withActive smgr (T.pack $ printf "[hashing %s]" fp)
   $ withFile fp ReadMode \h -> do
   size <- hFileSize h
   hashes <- whileM (not <$> hIsEOF h) do
     offset <- hTell h
     withActive smgr (T.pack
-                     $ printf "[hashing %s (%.1f%%)]" fp (percent offset size))
+                     $ printf "[hashing (%.1f%%) %s]" (percent offset size) fp)
       do chunk <- BL.hGet h chunkSize
          evaluate $ (BL.fromStrict . SHA256.hashlazy) chunk
   return $ (ContentHash

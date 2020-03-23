@@ -658,7 +658,8 @@ uploadFile smgr fmgr mgr arg =
     progressMsg fileOffset =
       let off = fromIntegral fileOffset :: Int64
           sz = fromIntegral (localSize arg) :: Int64
-      in T.pack $ printf "[uploading %d/%d (%.1f%%)]" off sz (percent off sz)
+      in T.pack
+         $ printf "[uploading (%.1f%%) %s]" (percent off sz) (localPath arg)
     percent n d = if n == 0
                   then 0
                   else 100 * fromIntegral n / fromIntegral d :: Float
