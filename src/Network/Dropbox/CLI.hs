@@ -353,14 +353,6 @@ put fps dst = runWithProgress \smgr -> do
   let hashMap = makeHashMap dstlist
   S.mapM_ (\srclist -> do
               addLog smgr ("Starting batch", "")
-              -- Calculate local content hashes
-              addLog smgr ("Within batch: Calculating content hashes", "")
-              srclist <- S.toList
-                $ S.mapM (addDestination smgr fmgr pathMap hashMap)
-                $ (asyncly . maxThreads 10
-                   . S.mapM (addFileContentHash smgr fmgr)
-                   . serially)
-                $ S.fromList srclist
               -- Remove directories that are in the way
               -- TODO: Save files that will be copied below
               addLog smgr ("Within batch: Starting remote deletions", "")
@@ -393,10 +385,11 @@ put fps dst = runWithProgress \smgr -> do
               addLog smgr ("Finished batch", "")
           )
     $ groupFiles
-    -- $ groupBy (\_ _ -> ()) () (\_ -> False) FL.toList
-    -- $ S.chunksOf 100 FL.toList
+    $ S.mapM (addDestination smgr fmgr pathMap hashMap)
+    $ (asyncly . maxThreads 10
+        . S.mapM (addFileContentHash smgr fmgr)
+        . serially)
     $ filterA (\(fp, fs, p) -> isRegularFile fs)
-    -- $ S.trace (\(fp, fs, p) -> addLog smgr $ T.pack $ "Found " ++ fp)
     $ listDirsRec fmgr dst
     $ S.fromList fps
   where
@@ -417,10 +410,13 @@ put fps dst = runWithProgress \smgr -> do
     batchMinCount = 10
     batchMaxCount = 100
     batchMaxBytes = 128 * 1024 * 1024 -- 128 MByte
-    groupFiles :: Serial (FilePath, FileStatus, Path)
-               -> Serial [(FilePath, FileStatus, Path)]
+    groupFiles :: Serial ( FilePath, FileStatus, T.Text, Path
+                         , Preparation, Destination)
+               -> Serial [( FilePath, FileStatus, T.Text, Path
+                          , Preparation, Destination)]
     groupFiles =
-      groupBy (\(count, bytes) (fp, fs, p) -> (count + 1, bytes + fileSize fs))
+      groupBy (\(count, bytes) (fp, fs, fh, p, prep, dest) ->
+                 (count + 1, bytes + fileSize fs))
               (0, 0)
               (\(count, bytes) ->
                   count >= batchMinCount
