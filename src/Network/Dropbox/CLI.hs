@@ -415,14 +415,17 @@ put fps dst = runWithProgress \smgr -> do
       . filter isFile
     isFile FileMetadata{} = True
     isFile _ = False
-    batchCount = 100
-    batchBytes = 128 * 1024 * 1024 -- 128 MByte
+    batchMinCount = 10
+    batchMaxCount = 100
+    batchMaxBytes = 128 * 1024 * 1024 -- 128 MByte
     groupFiles :: Serial (FilePath, FileStatus, Path)
                -> Serial [(FilePath, FileStatus, Path)]
     groupFiles =
       groupBy (\(count, bytes) (fp, fs, p) -> (count + 1, bytes + fileSize fs))
               (0, 0)
-              (\(count, bytes) -> count >= batchCount || bytes >= batchBytes)
+              (\(count, bytes) ->
+                  count >= batchMinCount
+                  && (count >= batchMaxCount || bytes >= batchMaxBytes))
               FL.toList
     addFileContentHash :: ScreenManager
                        -> FileManager
