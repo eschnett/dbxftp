@@ -255,6 +255,11 @@ fileContentHash smgr fmgr fp =
     withActive smgr (T.pack
                      $ printf "[hashing (%.1f%%) %s]" (percent offset size) fp)
       do chunk <- BL.hGet h chunkSize
+         -- eof <- hIsEOF h
+         -- assert (if BL.length chunk < fromIntegral chunkSize then eof else not eof) $ return ()
+         -- evaluate if BL.null chunk
+         --          then BL.empty
+         --          else (BL.fromStrict . SHA256.hashlazy) chunk
          evaluate $ (BL.fromStrict . SHA256.hashlazy) chunk
   return $ (ContentHash
             . BL.toStrict

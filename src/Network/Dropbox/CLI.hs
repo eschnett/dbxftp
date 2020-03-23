@@ -216,10 +216,10 @@ runCmd (Rm fps) = rm $ fmap T.pack fps
 --------------------------------------------------------------------------------
 
 cp :: [Path] -> Path -> IO ()
-cp fps dst = do
+cp fps dst = runWithProgress \smgr -> do
   mgr <- liftIO newManager
   S.drain
-    $ (copy mgr :: Serial CopyArg -> Serial CopyResult)
+    $ (copy smgr mgr :: Serial CopyArg -> Serial CopyResult)
     $ (S.map (\fp -> CopyArg fp dst) :: Serial Path -> Serial CopyArg)
     $ (S.fromList fps :: Serial Path)
 
@@ -344,22 +344,20 @@ countUploaded counters =
   \counter -> (counter { uploaded = uploaded counter + 1}, ())
 
 put :: [FilePath] -> Path -> IO ()
-put fps dst = runWithProgress (put' fps dst)
-
-put' :: [FilePath] -> Path -> ScreenManager -> IO ()
-put' fps dst smgr = do
+put fps dst = runWithProgress \smgr -> do
   fmgr <- liftIO newFileManager
   mgr <- newManager
-  dstlist <- S.toList $ listFolder1 mgr (ListFolderArg dst True)
+  dstlist <- withActive smgr "[scanning remote files]"
+             $ S.toList $ listFolder1 mgr (ListFolderArg dst True)
   let pathMap = makePathMap dstlist
   let hashMap = makeHashMap dstlist
   S.drain
     $ S.mapM (\srclist -> do
                  -- Calculate local content hashes
                  srclist <- S.toList
-                   $ S.mapM (addDestination fmgr pathMap hashMap)
+                   $ S.mapM (addDestination smgr fmgr pathMap hashMap)
                    $ (asyncly . maxThreads 10
-                      . S.mapM (addFileContentHash fmgr)
+                      . S.mapM (addFileContentHash smgr fmgr)
                       . serially)
                    $ S.fromList srclist
                  -- Remove directories that are in the way
@@ -373,7 +371,7 @@ put' fps dst smgr = do
                    $ S.fromList srclist
                  -- Copy files
                  S.drain
-                   $ copy mgr
+                   $ copy smgr mgr
                    $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
                                    case dest of
                                      Copy src -> Just $ CopyArg src p
@@ -381,11 +379,11 @@ put' fps dst smgr = do
                    $ S.fromList srclist
                  -- Upload files
                  S.drain
-                   $ uploadFiles smgr fmgr mgr
+                   $ upload smgr fmgr mgr
                    $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
                                   case dest of
                                     Upload ->
-                                      Just $ uploadFileArg fp (fileSize fs) p
+                                      Just $ uploadArg fp (fileSize fs) p
                                     _ -> Nothing)
                    $ S.fromList srclist
              )
@@ -397,7 +395,7 @@ put' fps dst smgr = do
     makePathMap :: [Metadata] -> H.HashMap Path Metadata
     makePathMap =
       H.fromList
-      . fmap (\md -> (T.toLower (name md), md))
+      . fmap (\md -> (fromMaybe (T.toLower $ name md) (pathLower md) , md))
       . filter isMetadata
     isMetadata NoMetadata = False
     isMetadata _ = True
@@ -417,19 +415,21 @@ put' fps dst smgr = do
               (0, 0)
               (\(count, bytes) -> count >= batchCount || bytes >= batchBytes)
               FL.toList
-    addFileContentHash :: FileManager
+    addFileContentHash :: ScreenManager
+                       -> FileManager
                        -> (FilePath, FileStatus, Path)
                        -> IO (FilePath, FileStatus, T.Text, Path)
-    addFileContentHash fmgr (fp, fs, p) = do
+    addFileContentHash smgr fmgr (fp, fs, p) = do
       ContentHash fh <- fileContentHash smgr fmgr fp
       return (fp, fs, T.decodeUtf8 fh, p)
-    addDestination :: FileManager
+    addDestination :: ScreenManager
+                   -> FileManager
                    -> H.HashMap Path Metadata
                    -> H.HashMap T.Text Metadata
                    -> (FilePath, FileStatus, T.Text, Path)
                    -> IO (FilePath, FileStatus, T.Text, Path,
                           Preparation, Destination)
-    addDestination fmgr pathMap hashMap (fp, fs, fh, p) = do
+    addDestination smgr fmgr pathMap hashMap (fp, fs, fh, p) = do
       (prep, dest) <-
         chooseDestination smgr fmgr pathMap hashMap (fp, fs, fh, p)
       return (fp, fs, fh, p, prep, dest)
@@ -489,6 +489,7 @@ chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
         Nothing -> do uploading "remote does not exist"
                       return (NoPreparation, Upload)
         Just md -> do copying
+                      -- TODO: need to remove file
                       return (NoPreparation, Copy (identifier md))
     Just md -> case md of
       FileMetadata{} -> do
@@ -504,7 +505,7 @@ chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
                           return (NoPreparation, Copy (identifier md))
   where
     uploading reason =
-      addLog smgr $ T.pack $ printf "Uploading %s (%s)" fp reason
+      addLog smgr $ T.pack $ printf "Uploading %s to %s (%s)" fp p reason
     copying =
       addLog smgr $ T.pack $ printf "Copying %s from existing remote file" fp
     skipping =

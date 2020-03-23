@@ -96,12 +96,12 @@ module Network.Dropbox.API
   , MoveArg(..)
   , MoveResult(..)
   , move
-  , UploadFileArg(..)
-  , uploadFileArg
+  , UploadArg(..)
+  , uploadArg
   , WriteMode(..)
   , writeMode
-  , UploadFileResult(..)
-  , uploadFiles
+  , UploadResult(..)
+  , upload
   ) where
 
 import Control.DeepSeq
@@ -225,8 +225,8 @@ instance FromJSON CopyResult where
                     >> CopyError <$> v .: "failure"
                   ]
 
-copy :: Manager -> Serial CopyArg -> Serial CopyResult
-copy mgr args =
+copy :: ScreenManager -> Manager -> Serial CopyArg -> Serial CopyResult
+copy smgr mgr args =
   S.concatMap S.fromList
   $ S.mapM copyBatch
   $ S.chunksOf copyBatchSize FL.toList
@@ -237,6 +237,7 @@ copy mgr args =
     copyBatch pairs
       | null pairs = return []
       | otherwise = do
+          addLog smgr (T.pack $ show pairs)
           let arg = object [ "entries" .= pairs
                            , "autorename" .= False
                            ]
@@ -516,24 +517,24 @@ move mgr args =
 
 --------------------------------------------------------------------------------
 
-data UploadFileArg = UploadFileArg { localPath :: !FilePath
-                                   , localSize :: !FileOffset
-                                   , path :: !Path
-                                   , mode :: !WriteMode
-                                   , autorename :: !Bool
-                                   , mute :: !Bool
-                                   }
+data UploadArg = UploadArg { localPath :: !FilePath
+                           , localSize :: !FileOffset
+                           , path :: !Path
+                           , mode :: !WriteMode
+                           , autorename :: !Bool
+                           , mute :: !Bool
+                           }
   deriving (Eq, Ord, Read, Show)
 
-instance ToJSON UploadFileArg where
-  toJSON val = object [ "path" .= path (val :: UploadFileArg)
+instance ToJSON UploadArg where
+  toJSON val = object [ "path" .= path (val :: UploadArg)
                       , "mode" .= mode val
                       , "autorename" .= autorename val
                       , "mute" .= mute val
                       ]
 
-uploadFileArg :: FilePath -> FileOffset -> Path -> UploadFileArg
-uploadFileArg fp fs path = UploadFileArg fp fs path writeMode False False
+uploadArg :: FilePath -> FileOffset -> Path -> UploadArg
+uploadArg fp fs path = UploadArg fp fs path writeMode False False
 
 data WriteMode = Add | Overwrite | Update !T.Text
   deriving (Eq, Ord, Read, Show, Generic, NFData)
@@ -557,15 +558,15 @@ instance ToJSON UploadCursor where
   toJSON (UploadCursor sessionId offset) =
     object ["session_id" .= sessionId, "offset" .= offset]
 
-data UploadFileResult = UploadFileResult Metadata
-                      | UploadFileError T.Text
+data UploadResult = UploadResult Metadata
+                      | UploadError T.Text
   deriving (Eq, Ord, Read, Show)
 
-instance FromJSON UploadFileResult where
-  parseJSON = withObject "UploadFileResult"
+instance FromJSON UploadResult where
+  parseJSON = withObject "UploadResult"
     \v -> do tag <- v .: ".tag"
              asum [ guard (tag == String "success")
-                    >> UploadFileResult
+                    >> UploadResult
                     <$> (FileMetadata
                          <$> v .: "name"
                          <*> v .: "id"
@@ -575,30 +576,28 @@ instance FromJSON UploadFileResult where
                          <*> v .:? "symlink_info"
                          <*> v .: "content_hash")
                   , guard (tag == String "failure")
-                    >> UploadFileError <$> v .: "failure"
+                    >> UploadError <$> v .: "failure"
                   ]
 
-uploadFiles :: ScreenManager -> FileManager -> Manager
-            -> Serial UploadFileArg -> Serial UploadFileResult
-uploadFiles smgr fmgr mgr args =
+upload :: ScreenManager -> FileManager -> Manager
+       -> Serial UploadArg -> Serial UploadResult
+upload smgr fmgr mgr args =
   S.concatMap S.fromList
   $ S.mapM (uploadFinish smgr mgr)
   $ groupFiles
-  -- TODO: runs out of memory for parallel uploads; need ByteString.copy?
-  $ asyncly . maxThreads 10 . S.mapM (uploadFile smgr fmgr mgr)
-  -- $ serially . S.mapM (uploadFile smgr fmgr mgr)
-  $ serially $ args
+  $ asyncly . maxThreads 10 . S.mapM (uploadContent smgr fmgr mgr) . serially
+  $ args
   where
     -- finishBatchCount = 1000 :: Int
     finishBatchCount = 100 :: Int
     finishBatchBytes = 128 * 1024 * 1024 -- 128 MByte
     groupFiles :: (IsStream t, MonadAsync m)
-               => t m (UploadFileArg, UploadCursor)
-               -> t m [(UploadFileArg, UploadCursor)]
-    groupFiles files =
+               => t m (UploadArg, UploadCursor)
+               -> t m [(UploadArg, UploadCursor)]
+    groupFiles =
       S.map (fmap \(arg, cursor, _, _, _) -> (arg, cursor))
-      $ S.splitOnSuffix (\(_, _, _, _, finish) -> finish) FL.toList
-      $ S.postscanl' (\(_, _, count, size, _) (arg, cursor) ->
+      . S.splitOnSuffix (\(_, _, _, _, finish) -> finish) FL.toList
+      . S.postscanl' (\(_, _, count, size, _) (arg, cursor) ->
                         let count' = count + 1
                             size' = size + offset (cursor :: UploadCursor)
                             finish = count' >= finishBatchCount ||
@@ -607,19 +606,19 @@ uploadFiles smgr fmgr mgr args =
                            then (arg, cursor, 0, 0, True)
                            else (arg, cursor, count', size', False))
                      (undefined, undefined, 0, 0, True)
-      $ files
 
 
 
-newtype UploadResult = UploadResult { sessionId :: T.Text }
+newtype UploadContentResult = UploadContentResult { sessionId :: T.Text }
   deriving (Eq, Ord, Read, Show)
 
-instance FromJSON UploadResult where
-  parseJSON = withObject "UploadResult" \v -> UploadResult <$> v .: "session_id"
+instance FromJSON UploadContentResult where
+  parseJSON = withObject "UploadContentResult"
+    \v -> UploadContentResult <$> v .: "session_id"
 
-uploadFile :: ScreenManager -> FileManager -> Manager
-           -> UploadFileArg -> IO (UploadFileArg, UploadCursor)
-uploadFile smgr fmgr mgr arg =
+uploadContent :: ScreenManager -> FileManager -> Manager
+              -> UploadArg -> IO (UploadArg, UploadCursor)
+uploadContent smgr fmgr mgr arg =
   bracket_ (waitOpenFile fmgr) (signalOpenFile fmgr)
   $ withBinaryFile (localPath arg) ReadMode \handle -> do
   (sessionId, fileOffset, closed) <- uploadStart handle
@@ -641,7 +640,7 @@ uploadFile smgr fmgr mgr arg =
       result <- withActive smgr (progressMsg fileOffset)
                 $ sendContent mgr "/2/files/upload_session/start" arg
                 $ chunk
-      return (sessionId (result :: UploadResult), fileOffset, close)
+      return (sessionId (result :: UploadContentResult), fileOffset, close)
     uploadAppend :: Handle -> T.Text
                  -> (Int64, Bool) -> IO (Int64, Bool)
     uploadAppend handle sessionId (fileOffset, _) = do
@@ -666,7 +665,7 @@ uploadFile smgr fmgr mgr arg =
 
 
 
-data UploadFinishCheckResult = UFComplete { entries :: [UploadFileResult] }
+data UploadFinishCheckResult = UFComplete { entries :: [UploadResult] }
                              | UFAsyncJobId { asyncJobId :: !T.Text }
                              | UFInProgress
   deriving (Eq, Ord, Read, Show)
@@ -683,7 +682,7 @@ instance FromJSON UploadFinishCheckResult where
                   ]
 
 uploadFinish :: ScreenManager -> Manager
-             -> [(UploadFileArg, UploadCursor)] -> IO [UploadFileResult]
+             -> [(UploadArg, UploadCursor)] -> IO [UploadResult]
 uploadFinish smgr mgr uploads
   | null uploads = return []
   | otherwise = do
