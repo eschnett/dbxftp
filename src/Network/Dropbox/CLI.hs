@@ -355,7 +355,7 @@ put fps dst = runWithProgress \smgr -> do
   S.mapM_ (\srclist -> do
               addLog smgr "Starting batch"
               -- Calculate local content hashes
-              addLog smgr "Calculating content hashes"
+              addLog smgr "Within batch: Calculating content hashes"
               srclist <- S.toList
                 $ S.mapM (addDestination smgr fmgr pathMap hashMap)
                 $ (asyncly . maxThreads 10
@@ -364,7 +364,7 @@ put fps dst = runWithProgress \smgr -> do
                 $ S.fromList srclist
               -- Remove directories that are in the way
               -- TODO: Save files that will be copied below
-              addLog smgr "Starting remote deletions"
+              addLog smgr "Within batch: Starting remote deletions"
               S.drain
                 $ delete mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
@@ -373,7 +373,7 @@ put fps dst = runWithProgress \smgr -> do
                                  _ -> Nothing)
                 $ S.fromList srclist
               -- Copy files
-              addLog smgr "Starting remote copies"
+              addLog smgr "Within batch: Starting remote copies"
               S.drain
                 $ copy smgr mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
@@ -382,7 +382,7 @@ put fps dst = runWithProgress \smgr -> do
                                   _ -> Nothing)
                 $ S.fromList srclist
               -- Upload files
-              addLog smgr "Starting uploads"
+              addLog smgr "Within batch: Starting uploads"
               S.drain
                 $ upload smgr fmgr mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
@@ -514,7 +514,7 @@ chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
           else
           case H.lookup fh hashMap of
             Nothing -> do uploading "hash mismatch"
-                          return (NoPreparation, Upload)
+                          return (RemoveExisting, Upload)
             Just md -> do copying
                           return (RemoveExisting, Copy (identifier md))
       _ -> do

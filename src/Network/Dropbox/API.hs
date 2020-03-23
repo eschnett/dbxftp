@@ -237,7 +237,6 @@ copy smgr mgr args =
     copyBatch pairs
       | null pairs = return []
       | otherwise = do
-          addLog smgr (T.pack $ show pairs)
           let arg = object [ "entries" .= pairs
                            , "autorename" .= False
                            ]
