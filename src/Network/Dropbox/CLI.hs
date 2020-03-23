@@ -388,7 +388,8 @@ put fps dst = runWithProgress \smgr -> do
                                  _ -> Nothing)
                 $ S.fromList srclist
           )
-    $ groupFiles
+    -- $ groupFiles
+    $ S.chunksOf 100 FL.toList
     $ filterA (\(fp, fs, p) -> isRegularFile fs)
     $ S.trace (\(fp, fs, p) -> addLog smgr $ T.pack $ "Found " ++ fp)
     $ listDirsRec fmgr dst
