@@ -397,7 +397,7 @@ put fps dst = runWithProgress \smgr -> do
     -- $ groupBy (\_ _ -> ()) () (\_ -> False) FL.toList
     -- $ S.chunksOf 100 FL.toList
     $ filterA (\(fp, fs, p) -> isRegularFile fs)
-    $ S.trace (\(fp, fs, p) -> addLog smgr $ T.pack $ "Found " ++ fp)
+    -- $ S.trace (\(fp, fs, p) -> addLog smgr $ T.pack $ "Found " ++ fp)
     $ listDirsRec fmgr dst
     $ S.fromList fps
   where
@@ -504,7 +504,7 @@ chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
         Nothing -> do uploading "remote does not exist"
                       return (NoPreparation, Upload)
         Just md -> do copying
-                      return (RemoveExisting, Copy (identifier md))
+                      return (NoPreparation, Copy (identifier md))
     Just md -> case md of
       FileMetadata{} -> do
         let remoteHash = contentHash md
