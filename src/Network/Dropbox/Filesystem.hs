@@ -83,7 +83,6 @@ module Network.Dropbox.Filesystem
   , ContentHash(..)
   , contentHash
   , fileContentHash
-  , addContentHashes
   ) where
 
 import Control.Concurrent
@@ -95,13 +94,17 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BL
 import qualified Data.ByteString.Lazy as BL
 import Data.List
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Word
+import Network.Dropbox.Progress
 import Streamly
 import qualified Streamly.Internal.FileSystem.File as File
 import qualified Streamly.Memory.Array as A
 import qualified Streamly.Prelude as S
+import System.IO
 import System.Posix
+import Text.Printf
 
 --------------------------------------------------------------------------------
 
@@ -154,9 +157,7 @@ showFileStatus fs = "("
 instance Show FileStatus where show = showFileStatus
 
 fileStatus :: FileManager -> FilePath -> IO FileStatus
-fileStatus fmgr fp =
-  -- bracket_ (waitOpenFile fmgr) (signalOpenFile fmgr) $ getFileStatus fp
-  getSymbolicLinkStatus fp
+fileStatus fmgr fp = getSymbolicLinkStatus fp
 
 --------------------------------------------------------------------------------
 
@@ -232,15 +233,34 @@ contentHash content =
              | otherwise = Just $ BL.splitAt chunkSize bs
     chunkSize = 4 * 1024 * 1024 -- 4 MByte
 
--- might not be needed
-fileContentHash :: FileManager -> FilePath -> IO ContentHash
-fileContentHash fmgr fp =
+fileContentHash0 :: ScreenManager -> FileManager -> FilePath -> IO ContentHash
+fileContentHash0 smgr fmgr fp =
   bracket_
   (waitOpenFile fmgr)
   (signalOpenFile fmgr)
+  $ withActive smgr (T.pack $ printf "[hashing %s]" fp)
   do content <- BL.readFile fp
      hash <- evaluate $ contentHash content
      return hash
+
+fileContentHash :: ScreenManager -> FileManager -> FilePath -> IO ContentHash
+fileContentHash smgr fmgr fp =
+  bracket_
+  (waitOpenFile fmgr)
+  (signalOpenFile fmgr)
+  $ withActive smgr (T.pack $ printf "[hashing %s]" fp)
+  $ withFile fp ReadMode \h ->
+  do hashes <- whileM (not <$> hIsEOF h) do
+       chunk <- BL.hGet h chunkSize
+       return $ (BL.fromStrict . SHA256.hashlazy) chunk
+     return $ (ContentHash
+               . BL.toStrict
+               . BL.toLazyByteString
+               . BL.byteStringHex
+               . SHA256.hashlazy
+               . BL.concat) hashes
+  where 
+    chunkSize = 4 * 1024 * 1024 -- 4 MByte
 
 -- <https://www.dropbox.com/developers/reference/content-hash>
 contentHash1 :: Serial Word8 -> IO ContentHash
@@ -266,12 +286,3 @@ fileContentHash1 fmgr fp =
   (signalOpenFile fmgr)
   $ contentHash1
   $ File.toBytes fp
-
--- might not be needed
-addContentHashes :: FileManager
-                 -> Async (FilePath, FileStatus)
-                 -> Async (FilePath, FileStatus, ContentHash)
-addContentHashes fmgr = S.mapM addContentHash
-  where
-    addContentHash (fp, fs) = do hash <- fileContentHash fmgr fp
-                                 return (fp, fs, hash)

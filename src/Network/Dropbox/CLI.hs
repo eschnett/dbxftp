@@ -348,15 +348,17 @@ put' :: [FilePath] -> Path -> ScreenManager -> IO ()
 put' fps dst smgr = do
   fmgr <- liftIO newFileManager
   mgr <- newManager
-  counters <- newCounters
+  -- counters <- newCounters
   dstlist <- S.toList $ listFolder1 mgr (ListFolderArg dst True)
   let pathMap = makePathMap dstlist
   let hashMap = makeHashMap dstlist
   srclist <- S.toList
-             $ S.trace (\_ -> countNeedUpload counters)
+             -- $ S.trace (\_ -> countNeedUpload counters)
              $ S.mapM (addDestination fmgr pathMap hashMap)
-             $ S.mapM (addFileContentHash fmgr)
-             $ S.trace (\_ -> countFound counters)
+             $ (asyncly . maxThreads 10
+                . S.mapM (addFileContentHash fmgr)
+                . serially)
+             -- $ S.trace (\_ -> countFound counters)
              $ S.filter (\(fp, fs, p) -> isRegularFile fs)
              $ listDirsRec fmgr dst
              $ S.fromList fps
@@ -376,7 +378,7 @@ put' fps dst smgr = do
     $ S.fromList srclist
   -- Upload files
   S.drain
-    $ S.trace (\_ -> countUploaded counters)
+    -- $ S.trace (\_ -> countUploaded counters)
     $ uploadFiles smgr fmgr mgr
     $ S.map (\(fp, fs, fh, p, prep, dest) -> uploadFileArg fp (fileSize fs) p)
     $ S.filter (\(fp, fs, fh, p, prep, dest) -> dest == Upload)
@@ -400,8 +402,7 @@ put' fps dst smgr = do
                        -> (FilePath, FileStatus, Path)
                        -> IO (FilePath, FileStatus, T.Text, Path)
     addFileContentHash fmgr (fp, fs, p) = do
-      ContentHash fh <- withActive smgr (T.pack $ printf "[hashing %s]" fp)
-                        $ fileContentHash fmgr fp
+      ContentHash fh <- fileContentHash smgr fmgr fp
       return (fp, fs, T.decodeUtf8 fh, p)
     addDestination :: FileManager
                    -> H.HashMap Path Metadata
@@ -413,6 +414,32 @@ put' fps dst smgr = do
       (prep, dest) <-
         chooseDestination smgr fmgr pathMap hashMap (fp, fs, fh, p)
       return (fp, fs, fh, p, prep, dest)
+
+listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
+listFolder1 mgr arg =
+  S.handle (\case DbxNotFoundException {} -> S.nil
+                  ex -> liftIO $ throw ex)
+  $ listFolder mgr arg
+
+listDirsRec :: FileManager
+            -> Path
+            -> Serial FilePath
+            -> Serial (FilePath, FileStatus, Path)
+listDirsRec fmgr dst = S.concatMap (listDirRec dst)
+  where
+    listDirRec :: Path -> FilePath
+               -> Serial (FilePath, FileStatus, Path)
+    listDirRec dst src = do
+      fs <- S.yieldM $ fileStatus fmgr src
+      if isDirectory fs
+        then S.concatMap (listDirRec1 dst src) $ listDir fmgr src
+        else S.yield (src, fs, dst)
+    listDirRec1 :: Path -> FilePath -> FilePath
+                -> Serial (FilePath, FileStatus, Path)
+    listDirRec1 dst src fp =
+      listDirRec (appendPath dst fp) (src </> fp)
+    appendPath :: Path -> FilePath -> Path
+    appendPath p fp = T.concat [p, "/", T.pack $ takeFileName fp]
 
 chooseDestination :: ScreenManager -> FileManager
                   -> H.HashMap Path Metadata
@@ -446,82 +473,6 @@ chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
       addLog smgr $ T.pack $ printf "Copying %s from existing remote file" fp
     skipping =
       addLog smgr $ T.pack $ printf "Skipping %s" fp
-
-
---             ctrs <- readIORef counters
---             addLog smgr $ T.concat
---               [ "Uploading ", T.pack $ show p, " (remote does not exist) "
---               , T.pack $ showCounters ctrs ]
---             return (NoPreparation, Upload)
---           Just md -> do
---             case md of
---               FileMetadata{} ->
---                 if size md /= fromIntegral (fileSize fs)
---                 then do
---                   ctrs <- readIORef counters
---                   addLog smgr $ T.concat
---                     [ "Uploading ", T.pack $ show p, " (remote size differs)"
---                     , T.pack $ showCounters ctrs ]
---                   return Upload
---                 else do
---                   ContentHash hash <-
---                     withActive smgr (T.pack $ "[hashing " ++ fp ++ "]")
---                     $ fileContentHash fmgr fp
---                   let hashDiffers = T.encodeUtf8 (contentHash md) /= hash
---                   ctrs <- readIORef counters
---                   if hashDiffers
---                     then do liftIO $ addLog smgr $ T.concat
---                               [ "Uploading ", T.pack $ show p, " (hash differs)"
---                               , T.pack $ showCounters ctrs ]
---                             return Upload
---                     else do liftIO $ addLog smgr $ T.concat
---                               [ "Skipping ", T.pack $ show p, " "
---                               , T.pack $ showCounters ctrs ]
---                             return Skip
---               _ -> do liftIO $ addLog smgr $ T.concat
---                         [ "Uploading ", T.pack $ show p
---                         , " (remote file type differs)"
---                         , T.pack $ showCounters ctrs ]
---                       return (RemoveExisting, Upload)
---     makeUploadFileArg :: (FilePath, FileStatus, Path) -> UploadFileArg
---     makeUploadFileArg (fp, fs, p) =
---       let mode = Overwrite
---           autorename = False
---           mute = False
---       in UploadFileArg fp (fileSize fs) p mode autorename mute
---     makeCopyArg :: (FilePath, FileStatus, Path) -> CopyArg
---     makeCopyArg (fp, fs, p) = CopyArg fpfp p
-
-listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
-listFolder1 mgr arg =
-  S.handle (\case DbxNotFoundException {} -> S.nil
-                  ex -> liftIO $ throw ex)
-  $ listFolder mgr arg
-
-listDirsRec :: FileManager
-            -> Path
-            -> Serial FilePath
-            -> Serial (FilePath, FileStatus, Path)
-listDirsRec fmgr dst = S.concatMap (listDirRec fmgr dst)
-  where
-    listDirRec :: FileManager
-               -> Path
-               -> FilePath
-               -> Serial (FilePath, FileStatus, Path)
-    listDirRec fmgr dst src = do
-      fs <- S.yieldM $ fileStatus fmgr src
-      if isDirectory fs
-        then S.concatMap (listDirRec1 fmgr dst src) |$ listDir1 fmgr src
-        else S.yield (src, fs, dst)
-    listDir1 :: FileManager -> FilePath -> Serial FilePath
-    listDir1 fmgr fp = serially $ listDir fmgr fp
-    listDirRec1 :: FileManager
-                -> Path -> FilePath
-                -> FilePath -> Serial (FilePath, FileStatus, Path)
-    listDirRec1 fmgr dst src fp =
-      listDirRec fmgr (appendPath dst fp) (src </> fp)
-    appendPath :: Path -> FilePath -> Path
-    appendPath p fp = T.concat [p, "/", T.pack $ takeFileName fp]
 
 --------------------------------------------------------------------------------
 
