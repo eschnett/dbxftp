@@ -139,7 +139,7 @@ runWithProgress f = do
       threadDelay (1000 * 1000)
     takeMVar flag
   f smgr
-  putMVar flag ()
-  putMVar flag ()
   threadDelay (10 * 1000 * 1000)
+  putMVar flag ()
+  putMVar flag ()
   shutdown vty

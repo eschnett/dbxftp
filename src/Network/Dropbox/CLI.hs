@@ -349,6 +349,7 @@ put fps dst = runWithProgress \smgr -> do
   mgr <- newManager
   dstlist <- withActive smgr "[scanning remote files]"
              $ S.toList $ listFolder1 mgr (ListFolderArg dst True)
+  addLog smgr $ T.pack $ "Found " ++ show dstlist
   let pathMap = makePathMap dstlist
   let hashMap = makeHashMap dstlist
   S.mapM_ (\srclist -> do
@@ -389,6 +390,7 @@ put fps dst = runWithProgress \smgr -> do
           )
     $ groupFiles
     $ filterA (\(fp, fs, p) -> isRegularFile fs)
+    $ S.trace (\(fp, fs, p) -> addLog smgr $ T.pack $ "Found " ++ fp)
     $ listDirsRec fmgr dst
     $ S.fromList fps
   where
