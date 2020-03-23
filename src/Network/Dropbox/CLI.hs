@@ -234,20 +234,24 @@ ls long recursive fps = do
     |$ (S.fromList fps :: Ahead Path)
   where
     ls1 :: Manager -> Path -> Ahead T.Text
-    ls1 mgr fp = do
-      let arg = GetMetadataArg fp
-      md <- liftIO
-            $ handleJust (\case DbxNotFoundException{} -> Just ()
-                                _ -> Nothing)
-                         (\_ -> do putStrLn $ show fp ++ ": not found"
-                                   return NoMetadata)
-            $ getMetadata mgr arg
-      case md of
-        NoMetadata -> S.nil
-        FolderMetadata{} ->
-          let arg = ListFolderArg fp (recursive == LsRecursive)
-          in format <$> serially (listFolder mgr arg)
-        _ -> S.yield $ format md
+    ls1 mgr fp =
+      if fp == "" -- root folder
+      then let arg = ListFolderArg fp (recursive == LsRecursive)
+           in format <$> serially (listFolder mgr arg)
+      else do
+        let arg = GetMetadataArg fp
+        md <- liftIO
+              $ handleJust (\case DbxNotFoundException{} -> Just ()
+                                  _ -> Nothing)
+                           (\_ -> do putStrLn $ show fp ++ ": not found"
+                                     return NoMetadata)
+              $ getMetadata mgr arg
+        case md of
+          NoMetadata -> S.nil
+          FolderMetadata{} ->
+            let arg = ListFolderArg fp (recursive == LsRecursive)
+            in format <$> serially (listFolder mgr arg)
+          _ -> S.yield $ format md
     format :: Metadata -> T.Text
     format = case long of
       LsShort -> formatName
