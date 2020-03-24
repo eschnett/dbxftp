@@ -69,6 +69,8 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE MonadComprehensions#-}
 
+{-# LANGUAGE DuplicateRecordFields #-}
+
 module Network.Dropbox.CLI (main) where
 
 import Control.Exception
@@ -79,6 +81,7 @@ import Data.Maybe
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
+import Data.Time.Clock.POSIX
 import Network.Dropbox.API hiding (mode)
 import Network.Dropbox.Filesystem hiding (contentHash)
 import Network.Dropbox.Progress
@@ -382,8 +385,7 @@ put fps dst = runWithProgress \smgr -> do
                 $ upload smgr fmgr mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
                                case dest of
-                                 Upload ->
-                                   Just $ uploadArg fp (fileSize fs) p
+                                 Upload -> Just $ uploadArg fp fs p
                                  _ -> Nothing)
                 $ S.fromList srclist
               addLog smgr ("Finished batch", "")
@@ -411,21 +413,24 @@ put fps dst = runWithProgress \smgr -> do
       . filter isFile
     isFile FileMetadata{} = True
     isFile _ = False
-    batchMinCount = 10
-    batchMaxCount = 100
-    batchMaxBytes = 128 * 1024 * 1024 -- 128 MByte
+    batchMaxCount = 1000
+    batchMinUploadCount = 10
+    batchMaxUploadBytes = 128 * 1024 * 1024 -- 128 MByte
     groupFiles :: Serial ( FilePath, FileStatus, T.Text, Path
                          , Preparation, Destination)
                -> Serial [( FilePath, FileStatus, T.Text, Path
                           , Preparation, Destination)]
     groupFiles =
-      groupBy (\(count, bytes) (fp, fs, fh, p, prep, dest) ->
-                 (count + 1, bytes + fileSize fs))
-              (0, 0)
-              (\(count, bytes) ->
-                  count >= batchMinCount
-                  && (count >= batchMaxCount || bytes >= batchMaxBytes))
+      groupBy (\(c, uc, ub) (fp, fs, fh, p, prep, dest) ->
+                 case dest of
+                   Upload -> (c + 1, uc + 1, ub + fileSize fs)
+                   _ -> (c + 1, uc, ub))
+              (0, 0, 0)
+              (\(c, uc, ub) ->
+                 c >= batchMaxCount
+                 || (uc >= batchMinUploadCount && ub >= batchMaxUploadBytes))
               FL.toList
+    -- TODO: Check inode numbers (deviceID and fileID)
     addFileContentHash :: ScreenManager
                        -> FileManager
                        -> (FilePath, FileStatus, Path)
@@ -521,10 +526,44 @@ chooseDestination smgr fmgr pathMap hashMap arg@(fp, fs, fh, p) =
                           return (RemoveExisting, Copy (identifier md))
       _ -> do
         case H.lookup fh hashMap of
-          Nothing -> do uploading "hash mismatch"
+          Nothing -> do uploading "file type mismatch"
                         return (RemoveExisting, Upload)
           Just md -> do copying
                         return (RemoveExisting, Copy (identifier md))
+  where
+    uploading reason =
+      addLog smgr $ ( T.pack $ printf "Uploading "
+                    , T.pack $ printf "%s (%s)" fp reason)
+    copying =
+      addLog smgr $ ( T.pack $ printf "Copying "
+                    , T.pack $ printf "%s from existing remote file" fp)
+    skipping =
+      addLog smgr $ ( T.pack $ printf "Skipping "
+                    , T.pack $ printf "%s" fp)
+
+chooseDestination' :: ScreenManager -> FileManager
+                   -> H.HashMap Path Metadata
+                   -> (FilePath, FileStatus, T.Text, Path)
+                   -> IO (Preparation, Destination)
+chooseDestination' smgr fmgr pathMap arg@(fp, fs, fh, p) =
+  case H.lookup (T.toLower p) pathMap of
+    Nothing ->
+      do uploading "remote does not exist"
+         return (NoPreparation, Upload)
+    Just md -> case md of
+      FileMetadata{} -> do
+        let remoteSize = fromIntegral $ size md
+        let remoteMtime = serverModified md
+        let clientMtime = clientModified (md :: Metadata)
+        let size = fileSize fs
+        let mtime = Timestamp $ posixSecondsToUTCTime $ modificationTimeHiRes fs
+        if size == remoteSize && mtime == clientMtime && mtime <= remoteMtime
+          then do skipping
+                  return (NoPreparation, Skip)
+          else do uploading "size or mtime mismatch"
+                  return (RemoveExisting, Upload)
+      _ -> do uploading "file type mismatch"
+              return (RemoveExisting, Upload)
   where
     uploading reason =
       addLog smgr $ ( T.pack $ printf "Uploading "

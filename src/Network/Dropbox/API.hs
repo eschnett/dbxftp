@@ -76,6 +76,7 @@ module Network.Dropbox.API
   , newManager
   , DbxException(..)
   , Path
+  , Timestamp(..)
   , Metadata(..)
   , SymlinkInfo(..)
   , CopyArg(..)
@@ -114,6 +115,8 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Foldable hiding (toList)
 import Data.Int
 import qualified Data.Text as T
+import Data.Time
+import Data.Time.Clock.POSIX
 import qualified Data.Vector as V
 import GHC.Generics
 import Network.Dropbox.API.Basic
@@ -131,8 +134,28 @@ import Text.Printf
 
 type Path = T.Text
 
+newtype Timestamp = Timestamp UTCTime
+  deriving (Eq, Ord, Read, Show)
+
+timeFormat :: String
+timeFormat = "%Y-%m-%dT%H:%M:%SZ"
+
+instance FromJSON Timestamp where
+  parseJSON = withText "Timestamp"
+    \str -> return
+            $ Timestamp
+            $ parseTimeOrError False defaultTimeLocale timeFormat (T.unpack str)
+
+instance ToJSON Timestamp where
+  toJSON (Timestamp time) =
+    String $ T.pack $ formatTime defaultTimeLocale timeFormat time
+
+
+
 data Metadata = FileMetadata { name :: Path
                              , identifier :: Path
+                             , clientModified :: Timestamp
+                             , serverModified :: Timestamp
                              , size :: Int64
                              , pathLower :: Maybe Path
                              , pathDisplay :: Maybe Path
@@ -158,6 +181,8 @@ instance FromJSON Metadata where
                     >> FileMetadata
                     <$> v .: "name"
                     <*> v .: "id"
+                    <*> v .: "client_modified"
+                    <*> v .: "server_modified"
                     <*> v .: "size"
                     <*> v .:? "path_lower"
                     <*> v .:? "path_display"
@@ -521,19 +546,25 @@ data UploadArg = UploadArg { localPath :: !FilePath
                            , path :: !Path
                            , mode :: !WriteMode
                            , autorename :: !Bool
+                           , clientModified :: !Timestamp
                            , mute :: !Bool
                            }
   deriving (Eq, Ord, Read, Show)
 
 instance ToJSON UploadArg where
-  toJSON val = object [ "path" .= path (val :: UploadArg)
-                      , "mode" .= mode val
-                      , "autorename" .= autorename val
-                      , "mute" .= mute val
-                      ]
+  toJSON val = object $
+    [ "path" .= path (val :: UploadArg)
+    , "mode" .= mode val
+    , "autorename" .= autorename val
+    , "client_modified" .= clientModified (val :: UploadArg)
+    , "mute" .= mute val
+    ]
 
-uploadArg :: FilePath -> FileOffset -> Path -> UploadArg
-uploadArg fp fs path = UploadArg fp fs path writeMode False False
+uploadArg :: FilePath -> FileStatus -> Path -> UploadArg
+uploadArg fp fs path =
+  let size = fileSize fs
+      mtime = Timestamp $ posixSecondsToUTCTime $ modificationTimeHiRes fs
+  in UploadArg fp size path writeMode False mtime False
 
 data WriteMode = Add | Overwrite | Update !T.Text
   deriving (Eq, Ord, Read, Show, Generic, NFData)
@@ -569,6 +600,8 @@ instance FromJSON UploadResult where
                     <$> (FileMetadata
                          <$> v .: "name"
                          <*> v .: "id"
+                         <*> v .: "client_modified"
+                         <*> v .: "server_modified"
                          <*> v .: "size"
                          <*> v .:? "path_lower"
                          <*> v .:? "path_display"
@@ -587,8 +620,7 @@ upload smgr fmgr mgr args =
   $ asyncly . maxThreads 10 . S.mapM (uploadContent smgr fmgr mgr) . serially
   $ args
   where
-    -- finishBatchCount = 1000 :: Int
-    finishBatchCount = 100 :: Int
+    finishBatchCount = 1000 :: Int
     finishBatchBytes = 128 * 1024 * 1024 -- 128 MByte
     groupFiles :: (IsStream t, MonadAsync m)
                => t m (UploadArg, UploadCursor)
