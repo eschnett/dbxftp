@@ -275,14 +275,14 @@ copy smgr mgr args =
             CComplete entries -> return entries
             CAsyncJobId asyncJobId -> untilJust do
               t <- liftIO getCurrentTime
-              let arg' = object [ "async_job_id" .= asyncJobId ]
-              result' <- withActive smgr (progressMsg pairs t0 t)
-                         $ apiCall mgr "/2/files/copy_batch/check_v2" arg'
-              case result' of
-                CComplete entries -> return $ Just entries
-                CInProgress -> do threadDelay (1000 * 1000)
-                                  return Nothing
-                CAsyncJobId{} -> undefined
+              withActive smgr (progressMsg pairs t0 t) do
+                let arg' = object [ "async_job_id" .= asyncJobId ]
+                result' <- apiCall mgr "/2/files/copy_batch/check_v2" arg'
+                case result' of
+                  CComplete entries -> return $ Just entries
+                  CInProgress -> do threadDelay (1000 * 1000)
+                                    return Nothing
+                  CAsyncJobId{} -> undefined
             CInProgress -> undefined
     progressMsg pairs t0 t =
       let dt :: Float =
@@ -355,14 +355,14 @@ createFolder smgr mgr args =
             CFComplete entries -> return entries
             CFAsyncJobId asyncJobId -> untilJust do
               t <- liftIO getCurrentTime
-              let arg' = object [ "async_job_id" .= asyncJobId ]
-              result' <- withActive smgr (progressMsg paths t0 t)
-                         $ apiCall mgr "/2/files/create_folder_batch/check" arg'
-              case result' of
-                CFComplete entries -> return $ Just entries
-                CFInProgress -> do threadDelay (100 * 1000)
-                                   return Nothing
-                CFAsyncJobId{} -> undefined
+              withActive smgr (progressMsg paths t0 t) do
+                let arg' = object [ "async_job_id" .= asyncJobId ]
+                result' <- apiCall mgr "/2/files/create_folder_batch/check" arg'
+                case result' of
+                  CFComplete entries -> return $ Just entries
+                  CFInProgress -> do threadDelay (100 * 1000)
+                                     return Nothing
+                  CFAsyncJobId{} -> undefined
             CFInProgress -> undefined
     progressMsg paths t0 t =
       let dt :: Float =
@@ -428,14 +428,14 @@ delete smgr mgr args =
             DComplete entries -> return entries
             DAsyncJobId asyncJobId -> untilJust do
               t <- liftIO getCurrentTime
-              let arg' = object [ "async_job_id" .= asyncJobId ]
-              result' <- withActive smgr (progressMsg paths t0 t)
-                         $ apiCall mgr "/2/files/delete_batch/check" arg'
-              case result' of
-                DComplete entries -> return $ Just entries
-                DInProgress -> do threadDelay (100 * 1000)
-                                  return Nothing
-                DAsyncJobId{} -> undefined
+              withActive smgr (progressMsg paths t0 t) do
+                let arg' = object [ "async_job_id" .= asyncJobId ]
+                result' <- apiCall mgr "/2/files/delete_batch/check" arg'
+                case result' of
+                  DComplete entries -> return $ Just entries
+                  DInProgress -> do threadDelay (100 * 1000)
+                                    return Nothing
+                  DAsyncJobId{} -> undefined
             DInProgress -> undefined
     progressMsg paths t0 t =
       let dt :: Float =
@@ -580,14 +580,14 @@ move smgr mgr args =
             MComplete entries -> return entries
             MAsyncJobId asyncJobId -> untilJust do
               t <- liftIO getCurrentTime
-              let arg' = object [ "async_job_id" .= asyncJobId ]
-              result' <- withActive smgr (progressMsg pairs t0 t)
-                         $ apiCall mgr "/2/files/move_batch/check_v2" arg'
-              case result' of
-                MComplete entries -> return $ Just entries
-                MInProgress -> do threadDelay (100 * 1000)
-                                  return Nothing
-                MAsyncJobId{} -> undefined
+              withActive smgr (progressMsg pairs t0 t) do
+                let arg' = object [ "async_job_id" .= asyncJobId ]
+                result' <- apiCall mgr "/2/files/move_batch/check_v2" arg'
+                case result' of
+                  MComplete entries -> return $ Just entries
+                  MInProgress -> do threadDelay (100 * 1000)
+                                    return Nothing
+                  MAsyncJobId{} -> undefined
             MInProgress -> undefined
     progressMsg pairs t0 t =
       let dt :: Float =
@@ -788,15 +788,15 @@ uploadFinish smgr mgr uploads
         UFComplete entries -> return entries
         UFAsyncJobId asyncJobId -> untilJust do
           t <- liftIO getCurrentTime
-          let arg' = object [ "async_job_id" .= asyncJobId ]
-          result' <-
-            withActive smgr (progressMsg uploads t t0)
-            $ apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
-          case result' of
-            UFComplete entries -> return $ Just entries
-            UFInProgress -> do threadDelay (100 * 1000)
-                               return Nothing
-            UFAsyncJobId{} -> undefined
+          withActive smgr (progressMsg uploads t t0) do
+            let arg' = object [ "async_job_id" .= asyncJobId ]
+            result' <-
+              apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
+            case result' of
+              UFComplete entries -> return $ Just entries
+              UFInProgress -> do threadDelay (100 * 1000)
+                                 return Nothing
+              UFAsyncJobId{} -> undefined
         UFInProgress -> undefined
   where
     progressMsg uploads t0 t =
