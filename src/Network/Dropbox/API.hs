@@ -496,26 +496,28 @@ listFolder smgr mgr arg = S.concatMap S.fromFoldable listChunks
       t0 <- liftIO getCurrentTime
       (mds, state) <- liftIO (listInit t0)
       S.yield mds <> S.unfoldrM (listNext t0) state
-    listInit :: UTCTime -> IO (V.Vector Metadata, (T.Text, Bool))
+    listInit :: UTCTime -> IO (V.Vector Metadata, (T.Text, Int, Bool))
     listInit t0 = do
-      result <- withActive smgr (progressMsg pairs t0 t0)
+      let count = 0 :: Int
+      result <- withActive smgr (progressMsg count t0 t0)
                 $ apiCall mgr "/2/files/list_folder" arg
-      return ( entries (result :: ListFolderResult)
-             , (cursor result, hasMore result))
+      let es = entries (result :: ListFolderResult)
+      return (es, (cursor result, count + V.length es, hasMore result))
     listNext :: UTCTime
-             -> (T.Text, Bool) -> IO (Maybe (V.Vector Metadata, (T.Text, Bool)))
-    listNext _ (_, False) = return Nothing
-    listNext t0 (prevCursor, True) = do
+             -> (T.Text, Int, Bool)
+             -> IO (Maybe (V.Vector Metadata, (T.Text, Int, Bool)))
+    listNext _ (_, _, False) = return Nothing
+    listNext t0 (prevCursor, count, True) = do
       t <- liftIO getCurrentTime
       let nextArg = object [ "cursor" .= prevCursor ]
-      result <- withActive smgr (progressMsg pairs t0 t)
+      result <- withActive smgr (progressMsg count t0 t)
                 $ apiCall mgr "/2/files/list_folder/continue" nextArg
-      return $ Just ( entries (result :: ListFolderResult)
-                    , (cursor result, hasMore result))
-    progressMsg pairs t0 t =
+      let es = entries (result :: ListFolderResult)
+      return $ Just (es, (cursor result, count + length es, hasMore result))
+    progressMsg c t0 t =
       let dt :: Float =
             realToFrac $ nominalDiffTimeToSeconds $ diffUTCTime t t0
-      in (T.pack $ printf "[listing folder (waiting %.1f s)]" dt, "")
+      in (T.pack $ printf "[listing folder (%d, waiting %.1f s)]" c dt, "")
 
 --------------------------------------------------------------------------------
 
