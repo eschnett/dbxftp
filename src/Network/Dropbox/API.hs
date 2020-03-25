@@ -113,10 +113,12 @@ import Control.Monad.IO.Class
 import Control.Monad.Loops
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BL
+import Data.Fixed
 import Data.Foldable hiding (toList)
 import Data.Int
 import qualified Data.Text as T
 import Data.Time
+import Data.Time.Clock
 import Data.Time.Clock.POSIX
 import qualified Data.Vector as V
 import GHC.Generics
@@ -263,21 +265,31 @@ copy smgr mgr args =
     copyBatch pairs
       | null pairs = return []
       | otherwise = do
+          t0 <- liftIO getCurrentTime
           let arg = object [ "entries" .= pairs
                            , "autorename" .= False
                            ]
-          result <- apiCall mgr "/2/files/copy_batch_v2" arg
+          result <- withActive smgr (progressMsg pairs t0 t0)
+                    $ apiCall mgr "/2/files/copy_batch_v2" arg
           case result of
             CComplete entries -> return entries
             CAsyncJobId asyncJobId -> untilJust do
+              t <- liftIO getCurrentTime
               let arg' = object [ "async_job_id" .= asyncJobId ]
-              result' <- apiCall mgr "/2/files/copy_batch/check_v2" arg'
+              result' <- withActive smgr (progressMsg pairs t0 t)
+                         $ apiCall mgr "/2/files/copy_batch/check_v2" arg'
               case result' of
                 CComplete entries -> return $ Just entries
-                CInProgress -> do threadDelay (100 * 1000)
+                CInProgress -> do threadDelay (1000 * 1000)
                                   return Nothing
                 CAsyncJobId{} -> undefined
             CInProgress -> undefined
+    progressMsg pairs t0 t =
+      let dt :: Float =
+            realToFrac $ nominalDiffTimeToSeconds $ diffUTCTime t t0
+      in ( T.pack (printf "[coyping %d files (waiting %.1f s)]"
+                   (length pairs) dt)
+         , "")
 
 --------------------------------------------------------------------------------
 
@@ -322,8 +334,9 @@ instance FromJSON CreateFolderResult where
                     >> CreateFolderError <$> v .: "failure"
                   ]
 
-createFolder :: Manager -> Serial CreateFolderArg -> Serial CreateFolderResult
-createFolder mgr args =
+createFolder :: ScreenManager -> Manager
+             -> Serial CreateFolderArg -> Serial CreateFolderResult
+createFolder smgr mgr args =
   S.concatMap S.fromList
   $ S.mapM createFolders
   $ S.chunksOf createFoldersBatchSize FL.toList
@@ -334,19 +347,29 @@ createFolder mgr args =
     createFolders paths
       | null paths = return []
       | otherwise = do
+          t0 <- liftIO getCurrentTime
           let arg = object [ "paths" .= paths ]
-          result <- apiCall mgr "/2/files/create_folder_batch" arg
+          result <- withActive smgr (progressMsg paths t0 t0)
+                    $ apiCall mgr "/2/files/create_folder_batch" arg
           case result of
             CFComplete entries -> return entries
             CFAsyncJobId asyncJobId -> untilJust do
+              t <- liftIO getCurrentTime
               let arg' = object [ "async_job_id" .= asyncJobId ]
-              result' <- apiCall mgr "/2/files/create_folder_batch/check" arg'
+              result' <- withActive smgr (progressMsg paths t0 t)
+                         $ apiCall mgr "/2/files/create_folder_batch/check" arg'
               case result' of
                 CFComplete entries -> return $ Just entries
                 CFInProgress -> do threadDelay (100 * 1000)
                                    return Nothing
                 CFAsyncJobId{} -> undefined
             CFInProgress -> undefined
+    progressMsg paths t0 t =
+      let dt :: Float =
+            realToFrac $ nominalDiffTimeToSeconds $ diffUTCTime t t0
+      in ( T.pack
+           $ printf "[creating %d folders (waiting %.1f s)]" (length paths) dt
+         , "")
 
 --------------------------------------------------------------------------------
 
@@ -385,8 +408,8 @@ instance FromJSON DeleteResult where
                     >> DeleteError <$> v .: "failure"
                   ]
 
-delete :: Manager -> Serial DeleteArg -> Serial DeleteResult
-delete mgr args =
+delete :: ScreenManager -> Manager -> Serial DeleteArg -> Serial DeleteResult
+delete smgr mgr args =
   S.concatMap S.fromList
   $ S.mapM deleteBatch
   $ S.chunksOf deleteBatchSize FL.toList
@@ -397,19 +420,29 @@ delete mgr args =
     deleteBatch paths
       | null paths = return []
       | otherwise = do
+          t0 <- liftIO getCurrentTime
           let arg = object [ "entries" .= paths ]
-          result <- apiCall mgr "/2/files/delete_batch" arg
+          result <- withActive smgr (progressMsg paths t0 t0)
+                    $ apiCall mgr "/2/files/delete_batch" arg
           case result of
             DComplete entries -> return entries
             DAsyncJobId asyncJobId -> untilJust do
+              t <- liftIO getCurrentTime
               let arg' = object [ "async_job_id" .= asyncJobId ]
-              result' <- apiCall mgr "/2/files/delete_batch/check" arg'
+              result' <- withActive smgr (progressMsg paths t0 t)
+                         $ apiCall mgr "/2/files/delete_batch/check" arg'
               case result' of
                 DComplete entries -> return $ Just entries
                 DInProgress -> do threadDelay (100 * 1000)
                                   return Nothing
                 DAsyncJobId{} -> undefined
             DInProgress -> undefined
+    progressMsg paths t0 t =
+      let dt :: Float =
+            realToFrac $ nominalDiffTimeToSeconds $ diffUTCTime t t0
+      in ( T.pack (printf "[deleting %d files/folders (waiting %.1f s)]"
+                   (length paths) dt)
+         , "")
 
 --------------------------------------------------------------------------------
 
@@ -455,25 +488,34 @@ instance FromJSON ListFolderResult where
     <*> v .: "cursor"
     <*> v .: "has_more"
 
-listFolder :: Manager -> ListFolderArg -> Serial Metadata
-listFolder mgr arg = S.concatMap S.fromFoldable listChunks
+listFolder :: ScreenManager -> Manager -> ListFolderArg -> Serial Metadata
+listFolder smgr mgr arg = S.concatMap S.fromFoldable listChunks
   where
     listChunks :: Serial (V.Vector Metadata)
     listChunks = do
-      (mds, state) <- liftIO listInit
-      S.yield mds <> S.unfoldrM listNext state
-    listInit :: IO (V.Vector Metadata, (T.Text, Bool))
-    listInit = do
-      result <- apiCall mgr "/2/files/list_folder" arg
+      t0 <- liftIO getCurrentTime
+      (mds, state) <- liftIO (listInit t0)
+      S.yield mds <> S.unfoldrM (listNext t0) state
+    listInit :: UTCTime -> IO (V.Vector Metadata, (T.Text, Bool))
+    listInit t0 = do
+      result <- withActive smgr (progressMsg pairs t0 t0)
+                $ apiCall mgr "/2/files/list_folder" arg
       return ( entries (result :: ListFolderResult)
              , (cursor result, hasMore result))
-    listNext :: (T.Text, Bool) -> IO (Maybe (V.Vector Metadata, (T.Text, Bool)))
-    listNext (_, False) = return Nothing
-    listNext (prevCursor, True) = do
+    listNext :: UTCTime
+             -> (T.Text, Bool) -> IO (Maybe (V.Vector Metadata, (T.Text, Bool)))
+    listNext _ (_, False) = return Nothing
+    listNext t0 (prevCursor, True) = do
+      t <- liftIO getCurrentTime
       let nextArg = object [ "cursor" .= prevCursor ]
-      result <- apiCall mgr "/2/files/list_folder/continue" nextArg
+      result <- withActive smgr (progressMsg pairs t0 t)
+                $ apiCall mgr "/2/files/list_folder/continue" nextArg
       return $ Just ( entries (result :: ListFolderResult)
                     , (cursor result, hasMore result))
+    progressMsg pairs t0 t =
+      let dt :: Float =
+            realToFrac $ nominalDiffTimeToSeconds $ diffUTCTime t t0
+      in (T.pack $ printf "[listing folder (waiting %.1f s)]" dt, "")
 
 --------------------------------------------------------------------------------
 
@@ -516,8 +558,8 @@ instance FromJSON MoveResult where
                     >> MoveError <$> v .: "failure"
                   ]
 
-move :: Manager -> Serial MoveArg -> Serial MoveResult
-move mgr args =
+move :: ScreenManager -> Manager -> Serial MoveArg -> Serial MoveResult
+move smgr mgr args =
   S.concatMap S.fromList
   $ S.mapM moveBatch
   $ S.chunksOf moveBatchSize FL.toList
@@ -528,21 +570,31 @@ move mgr args =
     moveBatch pairs
       | null pairs = return []
       | otherwise = do
+          t0 <- liftIO getCurrentTime
           let arg = object [ "entries" .= pairs
                            , "autorename" .= False
                            ]
-          result <- apiCall mgr "/2/files/move_batch_v2" arg
+          result <- withActive smgr (progressMsg pairs t0 t0)
+                    $ apiCall mgr "/2/files/move_batch_v2" arg
           case result of
             MComplete entries -> return entries
             MAsyncJobId asyncJobId -> untilJust do
+              t <- liftIO getCurrentTime
               let arg' = object [ "async_job_id" .= asyncJobId ]
-              result' <- apiCall mgr "/2/files/move_batch/check_v2" arg'
+              result' <- withActive smgr (progressMsg pairs t0 t)
+                         $ apiCall mgr "/2/files/move_batch/check_v2" arg'
               case result' of
                 MComplete entries -> return $ Just entries
                 MInProgress -> do threadDelay (100 * 1000)
                                   return Nothing
                 MAsyncJobId{} -> undefined
             MInProgress -> undefined
+    progressMsg pairs t0 t =
+      let dt :: Float =
+            realToFrac $ nominalDiffTimeToSeconds $ diffUTCTime t t0
+      in ( T.pack (printf "[moving %d files (waiting %.1f s)]"
+                   (length pairs) dt)
+         , "")
 
 --------------------------------------------------------------------------------
 
@@ -722,6 +774,7 @@ uploadFinish :: ScreenManager -> Manager
 uploadFinish smgr mgr uploads
   | null uploads = return []
   | otherwise = do
+      t0 <- liftIO getCurrentTime
       let arg = object [ "entries" .= [ object [ "cursor" .= cursor
                                                , "commit" .= fileArg
                                                ]
@@ -729,20 +782,29 @@ uploadFinish smgr mgr uploads
                                       ]
                        ]
       result <- bracket_ (waitUploadFinish mgr) (signalUploadFinish mgr)
-                $ withActive smgr ("[finalizing upload]", "")
+                $ withActive smgr (progressMsg uploads t0 t0)
                 $ apiCall mgr "/2/files/upload_session/finish_batch" arg
       case result of
         UFComplete entries -> return entries
         UFAsyncJobId asyncJobId -> untilJust do
+          t <- liftIO getCurrentTime
           let arg' = object [ "async_job_id" .= asyncJobId ]
           result' <-
-            apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
+            withActive smgr (progressMsg uploads t t0)
+            $ apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
           case result' of
             UFComplete entries -> return $ Just entries
             UFInProgress -> do threadDelay (100 * 1000)
                                return Nothing
             UFAsyncJobId{} -> undefined
         UFInProgress -> undefined
+  where
+    progressMsg uploads t0 t =
+      let dt :: Float =
+            realToFrac $ nominalDiffTimeToSeconds $ diffUTCTime t t0
+      in ( T.pack (printf "[finalizing upload of %d files (waiting %.1f s)]"
+                   (length uploads) dt)
+         , "")
 
 
 

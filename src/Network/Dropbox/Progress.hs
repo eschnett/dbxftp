@@ -90,6 +90,7 @@ import Graphics.Vty
 -- TODO: Use Data.Sequence from "containers" instead of []
 
 data ScreenManager = ScreenManager { vty :: Vty
+                                   , title :: T.Text
                                    , logged :: IORef [(T.Text, T.Text)]
                                    , current :: IORef [(T.Text, T.Text)]
                                    }
@@ -119,8 +120,9 @@ displayActive smgr = do
   reg <- displayBounds out
   logged <- readIORef (logged smgr)
   current <- readIORef (current smgr)
-  let title = text (defAttr `withForeColor` green) "DBXFTP: put"
-  let img = vertCat ([title]
+  let headline = text' (defAttr `withForeColor` green)
+        $ "DBXFTP: " `T.append` title smgr
+  let img = vertCat ([headline]
                      ++ fmap (textImage reg) (reverse logged)
                      ++ [text defAttr ""]
                      ++ fmap (textImage reg) (sort current)
@@ -142,22 +144,23 @@ joinImages reg l r =
               r' = ell <|> cropLeft (w - wl - imageWidth ell) r
           in l <|> r'
 
-runWithProgress :: (ScreenManager -> IO ()) -> IO ()
-runWithProgress f = do
+runWithProgress :: T.Text -> (ScreenManager -> IO a) -> IO a
+runWithProgress title f = do
   cfg <- standardIOConfig
   vty <- mkVty cfg
   logged <- newIORef []
   current <- newIORef []
-  let smgr = ScreenManager vty logged current
+  let smgr = ScreenManager vty title logged current
   flag <- newEmptyMVar
   painter <- forkIO do
     whileM_ (isEmptyMVar flag) do
       displayActive smgr
       threadDelay (1000 * 1000)
     takeMVar flag
-  f smgr
+  result <- f smgr
   putMVar flag ()
   putMVar flag ()
   displayActive smgr
-  threadDelay (1000 * 1000)
+  -- threadDelay (1000 * 1000)
   shutdown vty
+  return result

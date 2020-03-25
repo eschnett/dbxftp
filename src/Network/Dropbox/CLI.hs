@@ -219,7 +219,7 @@ runCmd (Rm fps) = rm $ fmap T.pack fps
 --------------------------------------------------------------------------------
 
 cp :: [Path] -> Path -> IO ()
-cp fps dst = runWithProgress \smgr -> do
+cp fps dst = runWithProgress "cp" \smgr -> do
   mgr <- liftIO newManager
   S.drain
     $ (copy smgr mgr :: Serial CopyArg -> Serial CopyResult)
@@ -230,17 +230,19 @@ cp fps dst = runWithProgress \smgr -> do
 
 ls :: LsLong -> LsRecursive -> [Path] -> IO ()
 ls long recursive fps = do
-  mgr <- liftIO newManager
-  (S.mapM_ T.putStrLn :: Serial T.Text -> IO ())
-    $ (aheadly :: Ahead T.Text -> Serial T.Text)
-    $ (S.concatMap (ls1 mgr) :: Ahead Path -> Ahead T.Text)
-    |$ (S.fromList fps :: Ahead Path)
+  entries <- runWithProgress "ls" \smgr -> do
+    mgr <- liftIO newManager
+    S.toList
+      $ (aheadly :: Ahead T.Text -> Serial T.Text)
+      $ (S.concatMap (ls1 smgr mgr) :: Ahead Path -> Ahead T.Text)
+      |$ (S.fromList fps :: Ahead Path)
+  mapM_ T.putStrLn entries
   where
-    ls1 :: Manager -> Path -> Ahead T.Text
-    ls1 mgr fp =
+    ls1 :: ScreenManager -> Manager -> Path -> Ahead T.Text
+    ls1 smgr mgr fp =
       if fp == "" -- root folder
       then let arg = ListFolderArg fp (recursive == LsRecursive)
-           in format <$> serially (listFolder mgr arg)
+           in format <$> serially (listFolder smgr mgr arg)
       else do
         let arg = GetMetadataArg fp
         md <- liftIO
@@ -253,7 +255,7 @@ ls long recursive fps = do
           NoMetadata -> S.nil
           FolderMetadata{} ->
             let arg = ListFolderArg fp (recursive == LsRecursive)
-            in format <$> serially (listFolder mgr arg)
+            in format <$> serially (listFolder smgr mgr arg)
           _ -> S.yield $ format md
     format :: Metadata -> T.Text
     format = case long of
@@ -291,20 +293,21 @@ ls long recursive fps = do
 --------------------------------------------------------------------------------
 
 mkdir :: [Path] -> IO ()
-mkdir fps = do
+mkdir fps = runWithProgress "mkdir" \smgr -> do
   mgr <- liftIO newManager
   S.drain
-    $ (createFolder mgr :: Serial CreateFolderArg -> Serial CreateFolderResult)
+    $ (createFolder smgr mgr
+       :: Serial CreateFolderArg -> Serial CreateFolderResult)
     $ (S.map CreateFolderArg :: Serial Path -> Serial CreateFolderArg)
     $ (S.fromList fps :: Serial Path)
 
 --------------------------------------------------------------------------------
 
 mv :: [Path] -> Path -> IO ()
-mv fps dst = do
+mv fps dst = runWithProgress "mv" \smgr -> do
   mgr <- liftIO newManager
   S.drain
-    $ (move mgr :: Serial MoveArg -> Serial MoveResult)
+    $ (move smgr mgr :: Serial MoveArg -> Serial MoveResult)
     $ (S.map (\fp -> MoveArg fp dst) :: Serial Path -> Serial MoveArg)
     $ (S.fromList fps :: Serial Path)
 
@@ -351,11 +354,11 @@ countUploaded counters =
   \counter -> (counter { uploaded = uploaded counter + 1}, ())
 
 put :: [FilePath] -> Path -> IO ()
-put fps dst = runWithProgress \smgr -> do
+put fps dst = runWithProgress "put" \smgr -> do
   fmgr <- liftIO newFileManager
   mgr <- newManager
   dstlist <- withActive smgr ("[scanning remote files]", "")
-             $ S.toList $ listFolder1 mgr (ListFolderArg dst True)
+             $ S.toList $ listFolder1 smgr mgr (ListFolderArg dst True)
   let pathMap = makePathMap dstlist
   let hashMap = makeHashMap dstlist
   S.mapM_ (\srclist -> do
@@ -364,7 +367,7 @@ put fps dst = runWithProgress \smgr -> do
               -- TODO: Save files that will be copied below
               addLog smgr ("Within batch: Starting remote deletions", "")
               S.drain
-                $ delete mgr
+                $ delete smgr mgr
                 $ mapMaybeA (\(fp, fs, fh, p, prep, dest) ->
                                case prep of
                                  RemoveExisting -> Just $ DeleteArg p
@@ -473,11 +476,11 @@ groupBy step init pred fold =
         pred' (_, _, done) = done
         fold' = FL.lmap (\(Just a, _, _) -> a) fold
 
-listFolder1 :: Manager -> ListFolderArg -> Serial Metadata
-listFolder1 mgr arg =
+listFolder1 :: ScreenManager -> Manager -> ListFolderArg -> Serial Metadata
+listFolder1 smgr mgr arg =
   S.handle (\case DbxNotFoundException {} -> S.nil
                   ex -> liftIO $ throw ex)
-  $ listFolder mgr arg
+  $ listFolder smgr mgr arg
 
 listDirsRec :: FileManager
             -> Path
@@ -578,9 +581,9 @@ chooseDestination' smgr fmgr pathMap arg@(fp, fs, fh, p) =
 --------------------------------------------------------------------------------
 
 rm :: [Path] -> IO ()
-rm fps = do
+rm fps = runWithProgress "rm" \smgr -> do
   mgr <- liftIO newManager
   S.drain
-    $ (delete mgr :: Serial DeleteArg -> Serial DeleteResult)
+    $ (delete smgr mgr :: Serial DeleteArg -> Serial DeleteResult)
     $ (S.map DeleteArg :: Serial Path -> Serial DeleteArg)
     $ (S.fromList fps :: Serial Path)
