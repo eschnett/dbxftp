@@ -105,6 +105,7 @@ module Network.Dropbox.API
   , upload
   ) where
 
+import Control.Concurrent
 import Control.DeepSeq
 import Control.Exception
 import Control.Monad
@@ -273,7 +274,8 @@ copy smgr mgr args =
               result' <- apiCall mgr "/2/files/copy_batch/check_v2" arg'
               case result' of
                 CComplete entries -> return $ Just entries
-                CInProgress -> return Nothing
+                CInProgress -> do threadDelay (100 * 1000)
+                                  return Nothing
                 CAsyncJobId{} -> undefined
             CInProgress -> undefined
 
@@ -341,7 +343,8 @@ createFolder mgr args =
               result' <- apiCall mgr "/2/files/create_folder_batch/check" arg'
               case result' of
                 CFComplete entries -> return $ Just entries
-                CFInProgress -> return Nothing
+                CFInProgress -> do threadDelay (100 * 1000)
+                                   return Nothing
                 CFAsyncJobId{} -> undefined
             CFInProgress -> undefined
 
@@ -403,7 +406,8 @@ delete mgr args =
               result' <- apiCall mgr "/2/files/delete_batch/check" arg'
               case result' of
                 DComplete entries -> return $ Just entries
-                DInProgress -> return Nothing
+                DInProgress -> do threadDelay (100 * 1000)
+                                  return Nothing
                 DAsyncJobId{} -> undefined
             DInProgress -> undefined
 
@@ -535,7 +539,8 @@ move mgr args =
               result' <- apiCall mgr "/2/files/move_batch/check_v2" arg'
               case result' of
                 MComplete entries -> return $ Just entries
-                MInProgress -> return Nothing
+                MInProgress -> do threadDelay (100 * 1000)
+                                  return Nothing
                 MAsyncJobId{} -> undefined
             MInProgress -> undefined
 
@@ -734,7 +739,8 @@ uploadFinish smgr mgr uploads
             apiCall mgr "/2/files/upload_session/finish_batch/check" arg'
           case result' of
             UFComplete entries -> return $ Just entries
-            UFInProgress -> return Nothing
+            UFInProgress -> do threadDelay (100 * 1000)
+                               return Nothing
             UFAsyncJobId{} -> undefined
         UFInProgress -> undefined
 
