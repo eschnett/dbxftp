@@ -16,9 +16,3 @@
   would be "access_token:XXXXX". There can be a newline at the end.)
 
 Done!
-
-## Future work
-
-Experiment with `conduit` instead of `streamly`, in particular also
-`conduit-algorithms` (`unorderedAsyncMapC`). Rewrite
-`sourceDirectoryDeep`.
